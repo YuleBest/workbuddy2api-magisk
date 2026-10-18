@@ -69,5 +69,6 @@ SPEC.md
 !README.md
 !DEVELOPMENT.md
 !CHANGELOG.md
+!internal/prompt/defaultprompt.md
 !docs/*.md
 /signin
