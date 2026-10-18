@@ -1,0 +1,4 @@
+allowBuilds:
+  esbuild: true
+# pnpm 10+ 把设置从 package.json 的 "pnpm" 字段搬到了这里。
+# esbuild 需要执行安装脚本来落位二进制，Vite 依赖它；其余包一律不跑脚本。

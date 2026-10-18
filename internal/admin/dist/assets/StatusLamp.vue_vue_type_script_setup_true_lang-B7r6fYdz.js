@@ -1,0 +1,1 @@
+import{d as a,c as t,n,o as s}from"./index-D_679Ox1.js";const r=a({__name:"StatusLamp",props:{state:{},live:{type:Boolean}},setup(e){return(l,o)=>(s(),t("span",{class:n(["lamp",[e.state,{live:e.live&&e.state==="ok"}]]),"aria-hidden":"true"},null,2))}});export{r as _};

@@ -1,0 +1,1 @@
+import{d as l,c as s,a as t,t as a,e as c,M as d,o}from"./index-D_679Ox1.js";const i={class:"page-head"},r={key:0,class:"lede"},m={class:"actions"},p=l({__name:"PageHead",props:{title:{},lede:{}},setup(e){return(n,_)=>(o(),s("header",i,[t("div",null,[t("h1",null,a(e.title),1),e.lede?(o(),s("p",r,a(e.lede),1)):c("",!0)]),t("div",m,[d(n.$slots,"actions")])]))}});export{p as _};

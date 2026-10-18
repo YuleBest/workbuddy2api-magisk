@@ -1,0 +1,25 @@
+{
+  "name": "wb2api-admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WorkBuddy2API 网关管理后台（Vue 3 + Vite，构建产物内嵌进 Go 二进制）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "build:only": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "markdown-it": "^15.0.2",
+    "openai": "^7.25.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11",
+    "vue-tsc": "^2.2.0"
+  }
+}

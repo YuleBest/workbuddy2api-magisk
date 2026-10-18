@@ -1,0 +1,22 @@
+/* Inter 4.1 —— 从本地发行包 /home/yule/下载/Inter-4.1.zip 子集化后随包分发
+ * （不请求任何外部字体服务；文件已打进二进制）。
+ *
+ * 子集口径：拉丁基本区 + 拉丁扩展 A + 常用标点/货币/箭头，保留 wght 可变轴（100–900）
+ * 与 tnum 等特性；中文不在 Inter 覆盖范围内，由 --sans 栈里系统 CJK 字体接管。
+ *
+ * 重新生成（需 fonttools + brotli；当前 352KB 原始文件 → 52KB 子集）：
+ *   fonttools varLib.instancer InterVariable.woff2 opsz=14 -o inter-wght.woff2
+ *   pyftsubset inter-wght.woff2 \
+ *     --unicodes="U+0000-00FF,U+0100-017F,U+2010-2027,U+2030-205E,U+20A0-20BF,U+2116,U+2122,U+2190-2199,U+2212,U+2215,U+2260,U+FEFF,U+FFFD" \
+ *     --layout-features='kern,liga,calt,tnum,case,ccmp,mark,mkmk,locl' \
+ *     --flavor=woff2 --name-IDs='*' -o inter-latin.woff2
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/inter-latin.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0100-017F, U+2010-2027, U+2030-205E, U+20A0-20BF, U+2116, U+2122,
+    U+2190-2199, U+2212, U+2215, U+2260, U+FEFF, U+FFFD;
+}

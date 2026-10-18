@@ -1,0 +1,136 @@
+name: Build & Package Module
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wb2api-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Install shfmt
+        run: |
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.12.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Test Go packages
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Lint module scripts
+        run: |
+          shellcheck module/*.sh scripts/build_android.sh scripts/test_customize.sh
+          shfmt -i 4 -d module/*.sh scripts/build_android.sh scripts/test_customize.sh
+
+      - name: Build Android module
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: make build
+
+      - name: Test installer migration
+        run: ./scripts/test_customize.sh
+
+      - name: Validate module archive
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version=//p' module/module.prop | head -n 1)
+          ZIP="build/wb2api-${VERSION}-arm64-v8a.zip"
+          test -f "$ZIP"
+          test -f "${ZIP}.sha256"
+          unzip -t "$ZIP"
+          (
+            cd build
+            sha256sum -c "$(basename "${ZIP}.sha256")"
+          )
+
+          ENTRIES=$(unzip -Z1 "$ZIP")
+          for required in \
+            module.prop customize.sh service.sh action.sh uninstall.sh \
+            bin/wbapi bin/wb2api-server bin/wb2api-login
+          do
+            printf '%s\n' "$ENTRIES" | grep -Fxq "$required"
+          done
+
+          if printf '%s\n' "$ENTRIES" | grep -Eq \
+            '(^|/)(config\.json|keys\.json|auths/|data/|logs/|run/|tmp/|webroot/)'
+          then
+            echo "runtime data or WebUI found in module archive" >&2
+            exit 1
+          fi
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wb2api-module-${{ github.sha }}
+          path: |
+            build/wb2api-*-arm64-v8a.zip
+            build/wb2api-*-arm64-v8a.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Resolve release channel
+        id: release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF_NAME}" in
+            *-beta*|*-rc*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version=//p' module/module.prop | head -n 1)
+          if [ "${GITHUB_REF_NAME}" != "$VERSION" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match module version ${VERSION}" >&2
+            exit 1
+          fi
+          ZIP="build/wb2api-${VERSION}-arm64-v8a.zip"
+          NOTES=$(awk '/^## / { if (p) exit; p=1; next } p { print }' CHANGELOG.md)
+          [ -n "$NOTES" ] || NOTES="自动构建产物"
+
+          FLAGS=()
+          if [ "${{ steps.release.outputs.prerelease }}" = "true" ]; then
+            FLAGS+=(--prerelease)
+          fi
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "$ZIP" "${ZIP}.sha256" --clobber
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" --notes "$NOTES" "${FLAGS[@]}"
+          else
+            gh release create "${GITHUB_REF_NAME}" "$ZIP" "${ZIP}.sha256" \
+              --verify-tag --title "${GITHUB_REF_NAME}" --notes "$NOTES" "${FLAGS[@]}"
+          fi
