@@ -2,11 +2,17 @@
 // 设置：网关的生效配置（脱敏）与界面偏好。
 // 配置本身是只读的——改配置要动 config.json 并重启服务，页面上不放"假开关"。
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { LogOut, Moon, Sun } from '@lucide/vue'
 import { api, type ConfigPayload } from '../api'
 import { guard, logout, refreshOptions, setTheme, state } from '../store'
 import PageHead from '../components/PageHead.vue'
+import Panel from '../components/Panel.vue'
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { duration, n } from '../format'
 
+const router = useRouter()
 const payload = ref<ConfigPayload | null>(null)
 void (async () => {
   const res = await guard(() => api.config())
@@ -136,6 +142,40 @@ const groups = computed<Group[]>(() => {
   }
   return out
 })
+
+const runtime = computed(() => {
+  const p = payload.value
+  return [
+    { label: '服务', value: p?.service ?? '—' },
+    { label: '版本', value: p?.version ?? '—' },
+    { label: '监听', value: p?.listen ?? '—' },
+    { label: '启动时间', value: p ? new Date(p.started_at).toLocaleString('zh-CN') : '—' },
+    {
+      label: '运行时长',
+      value: p ? duration(Math.floor((Date.now() - new Date(p.started_at).getTime()) / 1000)) : '—',
+    },
+    { label: '粘性会话', value: `${n(p?.sticky_sessions)} 个绑定` },
+    { label: 'Redis 镜像', value: p?.redis_mode === 'upstash' ? '已启用' : '未启用（纯内存）' },
+    {
+      label: '提示词模式',
+      value: p?.prompt_mode === 'passthrough' ? 'passthrough（透传客户端 system）' : 'custom（网关自有提示词）',
+    },
+    { label: '密钥文件', value: p?.keys_file || '未配置文件（用 config 里的 api_key）' },
+    { label: '管理鉴权', value: p?.auth_required ? '需要 token' : '未设 token，任何人可访问' },
+  ]
+})
+
+const refreshValue = computed({
+  get: () => String(state.refreshSec),
+  set: (value: string) => {
+    state.refreshSec = Number(value)
+  },
+})
+
+function quit() {
+  logout()
+  void router.push('/login')
+}
 </script>
 
 <template>
@@ -145,92 +185,89 @@ const groups = computed<Group[]>(() => {
       lede="这里是网关当前生效的配置（密钥类字段只显示有没有配，不显示值）。要改配置，编辑 config.json 后重启服务。"
     />
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>运行信息</h2>
-      </div>
-      <div class="panel-body">
-        <dl class="kv">
-          <dt>服务</dt>
-          <dd>{{ payload?.service ?? '—' }}</dd>
-          <dt>版本</dt>
-          <dd>{{ payload?.version ?? '—' }}</dd>
-          <dt>监听</dt>
-          <dd>{{ payload?.listen ?? '—' }}</dd>
-          <dt>启动时间</dt>
-          <dd>{{ payload ? new Date(payload.started_at).toLocaleString('zh-CN') : '—' }}</dd>
-          <dt>运行时长</dt>
-          <dd>{{ payload ? duration(Math.floor((Date.now() - new Date(payload.started_at).getTime()) / 1000)) : '—' }}</dd>
-          <dt>粘性会话</dt>
-          <dd>{{ n(payload?.sticky_sessions) }} 个绑定</dd>
-          <dt>Redis 镜像</dt>
-          <dd>{{ payload?.redis_mode === 'upstash' ? '已启用' : '未启用（纯内存）' }}</dd>
-          <dt>提示词模式</dt>
-          <dd>{{ payload?.prompt_mode === 'passthrough' ? 'passthrough（透传客户端 system）' : 'custom（网关自有提示词）' }}</dd>
-          <dt>密钥文件</dt>
-          <dd>{{ payload?.keys_file || '未配置文件（用 config 里的 api_key）' }}</dd>
-          <dt>管理鉴权</dt>
-          <dd>{{ payload?.auth_required ? '需要 token' : '未设 token，任何人可访问' }}</dd>
-        </dl>
-      </div>
-    </section>
-
-    <div class="grid settings">
-      <section v-for="g in groups" :key="g.key" class="panel">
-        <div class="panel-head">
-          <h2>{{ g.label }}</h2>
+    <Panel title="运行信息" class="rise mb-6">
+      <dl class="grid gap-x-10 gap-y-3 text-[0.82rem] sm:grid-cols-2">
+        <div v-for="row in runtime" :key="row.label" class="flex items-baseline justify-between gap-4 border-b border-border/60 pb-2.5">
+          <dt class="shrink-0 text-muted-foreground">{{ row.label }}</dt>
+          <dd class="min-w-0 text-right break-words">{{ row.value }}</dd>
         </div>
-        <div class="panel-body tight">
-          <table class="data kv-table">
-            <tbody>
-              <tr v-for="r in g.rows" :key="r.k">
-                <td class="muted">{{ r.label }}</td>
-                <td class="n">{{ r.value }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
+      </dl>
+    </Panel>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>界面偏好</h2>
+    <Panel title="生效配置" note="密钥只回显是否配置，不显示值" class="rise rise-1 mb-6">
+      <div class="columns-1 gap-x-12 lg:columns-2">
+        <section v-for="g in groups" :key="g.key" class="mb-7 break-inside-avoid">
+          <h3 class="font-serif text-[0.9rem]">{{ g.label }}</h3>
+          <dl class="mt-2 border-t border-border/70">
+            <div
+              v-for="r in g.rows"
+              :key="r.k"
+              class="flex items-baseline justify-between gap-4 border-b border-border/50 py-1.5 text-[0.78rem]"
+            >
+              <dt class="shrink-0 text-muted-foreground">{{ r.label }}</dt>
+              <dd class="min-w-0 text-right break-words">{{ r.value }}</dd>
+            </div>
+          </dl>
+        </section>
       </div>
-      <div class="panel-body">
-        <div class="row wrap" style="gap: 24px">
-          <label class="field">
-            自动刷新间隔
-            <select :value="state.refreshSec" @change="state.refreshSec = Number(($event.target as HTMLSelectElement).value)">
-              <option v-for="o in refreshOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-            </select>
-          </label>
-          <label class="field">
-            主题
-            <select :value="state.theme" @change="setTheme(($event.target as HTMLSelectElement).value as 'light' | 'dark')">
-              <option value="light">浅色</option>
-              <option value="dark">深色</option>
-            </select>
-          </label>
-          <div class="field">
-            登录状态
-            <button type="button" @click="logout(); $router.push('/login')">退出登录</button>
+    </Panel>
+
+    <Panel title="界面偏好" class="rise rise-2 mb-6">
+      <div class="flex flex-wrap items-end gap-x-10 gap-y-5">
+        <div class="space-y-2">
+          <span class="block text-xs font-medium tracking-wide text-muted-foreground">自动刷新间隔</span>
+          <Select v-model="refreshValue">
+            <SelectTrigger class="w-[7.5rem]" aria-label="自动刷新间隔">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="o in refreshOptions" :key="o.value" :value="String(o.value)">
+                {{ o.label }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div class="space-y-2">
+          <span class="block text-xs font-medium tracking-wide text-muted-foreground">主题</span>
+          <div class="flex items-center gap-1.5">
+            <Button
+              :variant="state.theme === 'light' ? 'default' : 'outline'"
+              size="sm"
+              @click="setTheme('light')"
+            >
+              <Sun class="size-3.5" />
+              浅色
+            </Button>
+            <Button
+              :variant="state.theme === 'dark' ? 'default' : 'outline'"
+              size="sm"
+              @click="setTheme('dark')"
+            >
+              <Moon class="size-3.5" />
+              深色
+            </Button>
           </div>
         </div>
-      </div>
-    </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>改配置去哪改</h2>
+        <div class="space-y-2">
+          <span class="block text-xs font-medium tracking-wide text-muted-foreground">登录状态</span>
+          <Button variant="outline" size="sm" @click="quit">
+            <LogOut class="size-3.5" />
+            退出登录
+          </Button>
+        </div>
       </div>
-      <div class="panel-body">
-        <p class="muted" style="margin-top: 0">配置项都在网关主机上，页面刻意不提供在线修改——写错一个值就可能让整个网关起不来。</p>
-        <pre style="font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 3px; padding: 12px; overflow-x: auto; margin: 0">vim ~/wb2api/config.json
-sudo systemctl restart wbapi-gateway
+    </Panel>
+
+    <Panel title="改配置去哪改" class="rise rise-3">
+      <p class="text-[0.8rem] leading-relaxed text-muted-foreground">
+        配置项都在网关主机上，页面刻意不提供在线修改——写错一个值就可能让整个网关起不来。
+      </p>
+      <pre class="mono mt-4 overflow-x-auto rounded-md border border-border bg-muted/60 px-4 py-3 text-[0.72rem] leading-relaxed">vim ~/wb2api/config.json
+sudo systemctl restart wb2api-gateway
 
 # 调用密钥可以直接在「调用密钥」页改，热生效、不用重启</pre>
-      </div>
-    </section>
+    </Panel>
   </div>
 </template>

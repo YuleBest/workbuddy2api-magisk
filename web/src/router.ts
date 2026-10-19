@@ -7,14 +7,14 @@ import { state } from './store'
 
 const routes = [
   { path: '/', redirect: '/overview' },
-  { path: '/login', name: 'login', component: () => import('./views/LoginView.vue'), meta: { public: true } },
-  { path: '/overview', name: 'overview', component: () => import('./views/OverviewView.vue') },
-  { path: '/accounts', name: 'accounts', component: () => import('./views/AccountsView.vue') },
-  { path: '/keys', name: 'keys', component: () => import('./views/KeysView.vue') },
-  { path: '/logs', name: 'logs', component: () => import('./views/LogsView.vue') },
-  { path: '/models', name: 'models', component: () => import('./views/ModelsView.vue') },
-  { path: '/chat', name: 'chat', component: () => import('./views/ChatView.vue') },
-  { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
+  { path: '/login', name: 'login', component: () => import('./views/LoginView.vue'), meta: { public: true, title: '登录' } },
+  { path: '/overview', name: 'overview', meta: { title: '总览' }, component: () => import('./views/OverviewView.vue') },
+  { path: '/accounts', name: 'accounts', meta: { title: '账号池' }, component: () => import('./views/AccountsView.vue') },
+  { path: '/keys', name: 'keys', meta: { title: '调用密钥' }, component: () => import('./views/KeysView.vue') },
+  { path: '/logs', name: 'logs', meta: { title: '请求日志' }, component: () => import('./views/LogsView.vue') },
+  { path: '/models', name: 'models', meta: { title: '模型' }, component: () => import('./views/ModelsView.vue') },
+  { path: '/chat', name: 'chat', meta: { title: '模型对话' }, component: () => import('./views/ChatView.vue') },
+  { path: '/settings', name: 'settings', meta: { title: '设置' }, component: () => import('./views/SettingsView.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/overview' },
 ]
 

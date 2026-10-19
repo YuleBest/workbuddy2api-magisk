@@ -7,11 +7,27 @@
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { APIError } from 'openai'
+import { CircleAlert, MessageSquare, RefreshCw, Send, Square, Trash2 } from '@lucide/vue'
 import { api, type ModelInfo } from '../api'
 import { chatClient } from '../chat'
 import { renderMarkdown } from '../markdown'
 import { guard, logout, toast } from '../store'
 import PageHead from '../components/PageHead.vue'
+import Panel from '../components/Panel.vue'
+import EmptyState from '../components/EmptyState.vue'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { n } from '../format'
 
 interface Msg {
   role: 'user' | 'assistant'
@@ -62,6 +78,10 @@ const groups = computed<Group[]>(() => {
 })
 
 const current = computed(() => models.value.find((m) => m.id === model.value))
+
+const modelPlaceholder = computed(() =>
+  modelsLoaded.value ? '没有可用模型' : '正在拉取模型清单…',
+)
 
 // 模型清单变化很慢（网关侧缓存 1 小时），进页面拉一次即可。
 // 冷缓存时网关要去上游现拉，可能好几秒——这段窗口里清单是空的，别当成"没有账号"。
@@ -192,78 +212,119 @@ void load()
   <section class="view">
     <PageHead
       title="模型对话"
-      lede="选一个模型直接对话。请求走网关数据面，和真实客户端同构——会进请求日志与调用统计，池子忙时同样会收到 503。"
+      lede="选一个模型直接对话。请求走网关数据面，与真实客户端同构，池子忙时同样返回 503。"
     >
       <template #actions>
-        <button class="ghost" type="button" :disabled="modelsBusy" @click="load">
+        <Button variant="outline" size="sm" :disabled="modelsBusy" @click="load">
+          <RefreshCw class="size-3.5" />
           {{ modelsBusy ? '拉取中…' : '刷新模型' }}
-        </button>
-        <button class="ghost" type="button" :disabled="busy || messages.length === 0" @click="reset">
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="busy || messages.length === 0"
+          @click="reset"
+        >
+          <Trash2 class="size-3.5" />
           清空对话
-        </button>
+        </Button>
       </template>
     </PageHead>
 
-    <div class="panel">
-      <div class="panel-head">
-        <label class="field chat-pick">
-          <span>模型</span>
-          <select v-model="model" :disabled="busy || models.length === 0">
-            <option v-if="models.length === 0" value="">
-              {{ modelsLoaded ? '（没有可用模型）' : '（正在拉取…）' }}
-            </option>
-            <optgroup v-for="g in groups" :key="g.realm" :label="g.label">
-              <option v-for="m in g.items" :key="m.id" :value="m.id">{{ m.name || m.id }}</option>
-            </optgroup>
-          </select>
-        </label>
-        <span class="spacer"></span>
-        <span class="small muted mono">{{ model || '—' }}</span>
+    <Panel class="rise" flush>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 sm:px-6">
+        <span class="text-[0.7rem] text-muted-foreground">模型</span>
+        <Select v-model="model" :disabled="busy || models.length === 0">
+          <SelectTrigger class="h-8 w-full text-xs sm:w-[22rem]" aria-label="选择模型">
+            <SelectValue :placeholder="modelPlaceholder" />
+          </SelectTrigger>
+          <SelectContent position="popper" class="max-h-[18rem]">
+            <SelectGroup v-for="g in groups" :key="g.realm">
+              <SelectLabel>{{ g.label }}</SelectLabel>
+              <SelectItem v-for="m in g.items" :key="m.id" :value="m.id">
+                {{ m.name || m.id }}
+              </SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <span class="mono ml-auto hidden text-[0.68rem] text-muted-foreground sm:inline">
+          {{ model || '未选择模型' }}
+        </span>
       </div>
 
-      <div ref="scroller" class="chat-log">
-        <div v-if="messages.length === 0" class="empty">
-          <strong>还没有对话</strong>
-          <span v-if="!modelsLoaded">正在拉取模型清单（冷缓存时网关要现去上游拉，稍等几秒）…</span>
-          <span v-else-if="models.length === 0">模型清单是空的：网关一个可接活账号都没有，先看「账号池」。</span>
-          <span v-else>选好模型，在下面输入一句话开始。</span>
-        </div>
+      <div
+        ref="scroller"
+        :class="messages.length === 0 ? 'justify-center' : ''"
+        class="flex max-h-[58vh] min-h-[22rem] flex-col gap-5 overflow-y-auto px-5 py-5 sm:px-6"
+      >
+        <EmptyState v-if="messages.length === 0" :icon="MessageSquare" title="还没有对话">
+          <template v-if="!modelsLoaded">
+            正在拉取模型清单（冷缓存时网关要现去上游拉，稍等几秒）…
+          </template>
+          <template v-else-if="models.length === 0">
+            模型清单是空的：网关一个可接活账号都没有，先看「账号池」。
+          </template>
+          <template v-else>选好模型，在下面输入一句话开始。</template>
+        </EmptyState>
 
-        <div v-for="(m, i) in messages" :key="i" class="chat-msg" :class="m.role">
-          <span class="who">{{ m.role === 'user' ? '我' : '模型' }}</span>
-          <!-- 助手回复按 markdown 渲染（html:false，裸 HTML 被转义成字面文本）；用户输入按纯文本。 -->
-          <div v-if="m.role === 'assistant'" class="md" v-html="renderMarkdown(m.content)"></div>
-          <div v-else class="plain">{{ m.content }}</div>
-          <div v-if="m.streaming" class="chat-status">
-            <span class="caret" aria-hidden="true"></span>
-            <span v-if="thinking" class="small muted">思考中…</span>
+        <template v-for="(m, i) in messages" :key="i">
+          <div v-if="m.role === 'user'" class="flex justify-end">
+            <div
+              class="max-w-[85%] whitespace-pre-wrap rounded-lg rounded-br-sm border border-primary/25 bg-primary/10 px-4 py-2.5 text-[0.84rem] leading-relaxed"
+            >
+              {{ m.content }}
+            </div>
           </div>
-        </div>
 
-        <div v-if="error" class="notice bad">{{ error }}</div>
+          <div v-else class="border-l-2 border-primary/30 pl-4 sm:pl-5">
+            <p class="mono text-[0.65rem] tracking-[0.12em] text-muted-foreground">模型</p>
+            <!-- 助手回复按 markdown 渲染（html:false，裸 HTML 被转义成字面文本）；用户输入按纯文本。 -->
+            <div
+              v-if="m.content"
+              class="chat-markdown mt-1.5"
+              v-html="renderMarkdown(m.content)"
+            ></div>
+            <div v-if="m.streaming" class="mt-2 flex items-center gap-2">
+              <span class="caret" aria-hidden="true"></span>
+              <span v-if="thinking" class="text-[0.75rem] text-muted-foreground">思考中…</span>
+            </div>
+          </div>
+        </template>
+
+        <Alert v-if="error" variant="destructive">
+          <CircleAlert class="size-4" />
+          <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
       </div>
 
-      <form class="chat-input" @submit.prevent="send">
-        <textarea
+      <form class="border-t border-border px-5 py-4 sm:px-6" @submit.prevent="send">
+        <Textarea
           v-model="input"
           rows="3"
+          class="min-h-[5.25rem] resize-none"
           placeholder="Enter 发送，Shift+Enter 换行"
           :disabled="busy || !model"
           @keydown="onKeydown"
-        ></textarea>
-        <div class="row wrap">
-          <span class="small muted">
+        ></Textarea>
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <span class="text-[0.72rem] text-muted-foreground">
             {{
               current
-                ? `${current.name || current.id} · 上下文 ${current.context_length ?? '—'}`
+                ? `${current.name || current.id} · 上下文 ${n(current.context_length)}`
                 : '未选择模型'
             }}
           </span>
-          <span class="spacer"></span>
-          <button v-if="busy" class="danger" type="button" @click="stop">停止</button>
-          <button v-else class="primary" type="submit" :disabled="!input.trim() || !model">发送</button>
+          <span class="flex-1"></span>
+          <Button v-if="busy" variant="destructive" size="sm" type="button" @click="stop">
+            <Square class="size-3.5" />
+            停止
+          </Button>
+          <Button v-else type="submit" size="sm" :disabled="!input.trim() || !model">
+            <Send class="size-3.5" />
+            发送
+          </Button>
         </div>
       </form>
-    </div>
+    </Panel>
   </section>
 </template>

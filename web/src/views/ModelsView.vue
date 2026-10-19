@@ -5,9 +5,38 @@
 // 列的选择原则：只放"选模型时会用来判断"的字段（域 / 倍率 / 能不能识图 / 上下文与输出上限），
 // 其余（推理档位、能力细节、上游描述等）收进「更多」弹窗——表格宽了反而不好扫。
 import { computed, ref } from 'vue'
+import {
+  ArrowUpDown,
+  Boxes,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Ellipsis,
+  RefreshCw,
+  Search,
+  X,
+} from '@lucide/vue'
 import { api, type ModelInfo } from '../api'
 import { guard, toast } from '../store'
 import PageHead from '../components/PageHead.vue'
+import Panel from '../components/Panel.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import EmptyState from '../components/EmptyState.vue'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Separator } from '@/components/ui/separator'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { n } from '../format'
 
 const models = ref<ModelInfo[]>([])
@@ -35,15 +64,15 @@ void load()
 // 上游 credits 字段两个域形态不一致：CN 是 "x0.21"，global 是 "x0.34 credits"。
 // 统一取 x 后的数字；缺失（上游未给）显示 —，形态不认识时原样展示。
 // 展示只管数字与颜色（x0.00 绿底即"限时免费"，不再写"免费"二字，省列宽）。
-function creditRate(raw?: string): { text: string; tone: string } {
+function creditRate(raw?: string): { text: string; tone: 'ok' | 'warn' | 'outline' } {
   const v = (raw ?? '').trim()
-  if (!v) return { text: '—', tone: '' }
+  if (!v) return { text: '—', tone: 'outline' }
   const hit = /x\s*([0-9]+(?:\.[0-9]+)?)/i.exec(v)
-  if (!hit) return { text: v, tone: '' }
+  if (!hit) return { text: v, tone: 'outline' }
   const val = Number(hit[1])
   if (val === 0) return { text: 'x0.00', tone: 'ok' }
   if (val >= 1) return { text: `x${val.toFixed(2)}`, tone: 'warn' }
-  return { text: `x${val.toFixed(2)}`, tone: '' }
+  return { text: `x${val.toFixed(2)}`, tone: 'outline' }
 }
 
 // 排序：点表头在正序/倒序之间切换。缺值的模型（上游没给倍率的那些）恒定排最后，
@@ -184,197 +213,257 @@ function extraFields(m: ModelRow): { k: string; v: string }[] {
       lede="网关透传的上游模型清单。客户端拿 /v1/models 得到的就是这份数据，用哪个模型由请求里的 model 字段决定。"
     >
       <template #actions>
-        <span class="muted small">{{ models.length }} 个模型</span>
-        <button type="button" :disabled="busy" @click="load">{{ busy ? '拉取中…' : '刷新' }}</button>
+        <span class="num text-xs text-muted-foreground">{{ models.length }} 个模型</span>
+        <Button variant="outline" size="sm" :disabled="busy" @click="load">
+          <RefreshCw class="size-3.5" />
+          {{ busy ? '拉取中…' : '刷新' }}
+        </Button>
       </template>
     </PageHead>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>可用模型</h2>
-        <input
-          v-model="query"
-          class="search"
-          type="search"
-          placeholder="搜索模型名或 ID"
-          aria-label="搜索模型"
-        />
-        <span v-if="query" class="note">匹配 {{ filtered.length }} / {{ sorted.length }}</span>
-        <span class="spacer"></span>
-        <span v-if="loadedAt" class="note">更新于 {{ new Date(loadedAt).toLocaleTimeString('zh-CN') }}</span>
-      </div>
+    <Panel
+      title="可用模型"
+      :note="query ? `匹配 ${filtered.length} / ${sorted.length}` : loadedAt ? `更新于 ${new Date(loadedAt).toLocaleTimeString('zh-CN')}` : ''"
+      class="rise"
+      flush
+    >
+      <template #actions>
+        <div class="relative w-full sm:w-64">
+          <Search
+            class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            v-model="query"
+            class="h-8 pl-9 text-xs"
+            type="search"
+            placeholder="搜索模型名或 ID"
+            aria-label="搜索模型"
+          />
+        </div>
+      </template>
 
-      <div v-if="!sorted.length" class="empty">
-        <strong>没拿到模型列表</strong>
+      <div v-if="busy && !models.length" class="space-y-4 px-5 py-5 sm:px-6">
+        <div v-for="i in 6" :key="i" class="flex items-center gap-4">
+          <Skeleton class="h-4 w-40" />
+          <Skeleton class="h-5 w-14 rounded-full" />
+          <Skeleton class="h-4 w-16" />
+          <Skeleton class="h-5 w-14 rounded-full" />
+          <Skeleton class="ml-auto h-4 w-20" />
+        </div>
+      </div>
+      <EmptyState v-else-if="!sorted.length" :icon="Boxes" title="没拿到模型列表">
         模型表是纯动态拉取的：网关会向池内任一健康账号请求，池里没有可用账号时这里就是空的。先看「总览」的接活状态。
-      </div>
-      <div v-else-if="!view.length" class="empty">
-        <strong>没有匹配「{{ query }}」的模型</strong>
-        换个关键词，或者
-        <button class="ghost" type="button" @click="query = ''">清空搜索</button>
-      </div>
+        <template #action>
+          <Button as-child variant="outline" size="sm">
+            <RouterLink to="/overview">看总览</RouterLink>
+          </Button>
+        </template>
+      </EmptyState>
+      <EmptyState v-else-if="!view.length" :icon="Search" :title="`没有匹配「${query}」的模型`">
+        换个关键词，或者清空搜索。
+        <template #action>
+          <Button variant="outline" size="sm" @click="query = ''">清空搜索</Button>
+        </template>
+      </EmptyState>
 
-      <div v-else class="table-scroll">
-        <table class="data models">
-        <thead>
-          <tr>
-            <th>
-              <button class="sort" type="button" title="按模型名排序" @click="toggleSort('name')">
+      <Table v-else class="min-w-[48rem]">
+        <TableHeader>
+          <TableRow>
+            <TableHead class="w-[38%]">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 text-[0.72rem] font-medium transition-colors hover:text-foreground"
+                title="按模型名排序"
+                @click="toggleSort('name')"
+              >
                 模型
-                <svg class="sort-icon" :class="{ on: sortKey === 'name' }" width="9" height="11" viewBox="0 0 10 12" aria-hidden="true">
-                  <path v-if="sortKey === 'name'" :d="sortDir === 'asc' ? 'M1 8 5 3 9 8' : 'M1 4 5 9 9 4'" />
-                  <path v-else d="M1 4.5 5 1.5 9 4.5M1 7.5 5 10.5 9 7.5" />
-                </svg>
+                <ChevronUp v-if="sortKey === 'name' && sortDir === 'asc'" class="size-3 text-primary" />
+                <ChevronDown v-else-if="sortKey === 'name'" class="size-3 text-primary" />
+                <ArrowUpDown v-else class="size-3 opacity-50" />
               </button>
-            </th>
-            <th>域</th>
-            <th class="n">
-              <button class="sort" type="button" title="按积分倍率排序（缺倍率的排最后）" @click="toggleSort('rate')">
+            </TableHead>
+            <TableHead>域</TableHead>
+            <TableHead class="text-right">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 text-[0.72rem] font-medium transition-colors hover:text-foreground"
+                title="按积分倍率排序（缺倍率的排最后）"
+                @click="toggleSort('rate')"
+              >
                 积分倍率
-                <svg class="sort-icon" :class="{ on: sortKey === 'rate' }" width="9" height="11" viewBox="0 0 10 12" aria-hidden="true">
-                  <path v-if="sortKey === 'rate'" :d="sortDir === 'asc' ? 'M1 8 5 3 9 8' : 'M1 4 5 9 9 4'" />
-                  <path v-else d="M1 4.5 5 1.5 9 4.5M1 7.5 5 10.5 9 7.5" />
-                </svg>
+                <ChevronUp v-if="sortKey === 'rate' && sortDir === 'asc'" class="size-3 text-primary" />
+                <ChevronDown v-else-if="sortKey === 'rate'" class="size-3 text-primary" />
+                <ArrowUpDown v-else class="size-3 opacity-50" />
               </button>
-            </th>
-            <th>能力</th>
-            <th class="n">
-              <button class="sort" type="button" title="按上下文长度排序" @click="toggleSort('context')">
+            </TableHead>
+            <TableHead>能力</TableHead>
+            <TableHead class="text-right">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 text-[0.72rem] font-medium transition-colors hover:text-foreground"
+                title="按上下文长度排序"
+                @click="toggleSort('context')"
+              >
                 上下文长度
-                <svg class="sort-icon" :class="{ on: sortKey === 'context' }" width="9" height="11" viewBox="0 0 10 12" aria-hidden="true">
-                  <path v-if="sortKey === 'context'" :d="sortDir === 'asc' ? 'M1 8 5 3 9 8' : 'M1 4 5 9 9 4'" />
-                  <path v-else d="M1 4.5 5 1.5 9 4.5M1 7.5 5 10.5 9 7.5" />
-                </svg>
+                <ChevronUp v-if="sortKey === 'context' && sortDir === 'asc'" class="size-3 text-primary" />
+                <ChevronDown v-else-if="sortKey === 'context'" class="size-3 text-primary" />
+                <ArrowUpDown v-else class="size-3 opacity-50" />
               </button>
-            </th>
-            <th class="n">
-              <button class="sort" type="button" title="按单次最大输出排序（缺值的排最后）" @click="toggleSort('maxout')">
+            </TableHead>
+            <TableHead class="text-right">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 text-[0.72rem] font-medium transition-colors hover:text-foreground"
+                title="按单次最大输出排序（缺值的排最后）"
+                @click="toggleSort('maxout')"
+              >
                 单次最大输出
-                <svg class="sort-icon" :class="{ on: sortKey === 'maxout' }" width="9" height="11" viewBox="0 0 10 12" aria-hidden="true">
-                  <path v-if="sortKey === 'maxout'" :d="sortDir === 'asc' ? 'M1 8 5 3 9 8' : 'M1 4 5 9 9 4'" />
-                  <path v-else d="M1 4.5 5 1.5 9 4.5M1 7.5 5 10.5 9 7.5" />
-                </svg>
+                <ChevronUp v-if="sortKey === 'maxout' && sortDir === 'asc'" class="size-3 text-primary" />
+                <ChevronDown v-else-if="sortKey === 'maxout'" class="size-3 text-primary" />
+                <ArrowUpDown v-else class="size-3 opacity-50" />
               </button>
-            </th>
-            <th class="n">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="m in view" :key="m.id">
-            <td>
-              <div>{{ m.name }}</div>
-              <div class="mono small muted">{{ m.id }}</div>
-            </td>
-            <td>
-              <span class="tag">{{ realmText(m.realm) }}</span>
-            </td>
-            <td class="n">
-              <span class="tag" :class="creditRate(m.credits).tone">{{ creditRate(m.credits).text }}</span>
-            </td>
-            <td>
-              <span class="tag" :class="m.supports_images ? 'ok' : ''">{{ visionText(m) }}</span>
-            </td>
-            <td class="n">{{ n(m.context_length) }}</td>
-            <td class="n">{{ m.max_output_tokens ? n(m.max_output_tokens) : '—' }}</td>
-            <td class="n">
-              <div class="row" style="justify-content: flex-end; gap: 4px">
-                <button class="icon" type="button" :title="`复制 ID：${m.id}`" @click="copyID(m.id)">
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" stroke="currentColor" />
-                    <path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5v7A1.5 1.5 0 0 0 4 12h1.5" stroke="currentColor" />
-                  </svg>
-                </button>
-                <button class="icon" type="button" title="更多信息" @click="detail = m">
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <circle cx="3" cy="8" r="1.3" fill="currentColor" />
-                    <circle cx="8" cy="8" r="1.3" fill="currentColor" />
-                    <circle cx="13" cy="8" r="1.3" fill="currentColor" />
-                  </svg>
-                </button>
+            </TableHead>
+            <TableHead class="text-right">操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-for="m in view" :key="m.id">
+            <TableCell>
+              <div class="text-[0.88rem] font-medium">{{ m.name }}</div>
+              <div class="mono mt-0.5 text-[0.7rem] text-muted-foreground">{{ m.id }}</div>
+            </TableCell>
+            <TableCell>
+              <StatusBadge tone="outline">{{ realmText(m.realm) }}</StatusBadge>
+            </TableCell>
+            <TableCell class="text-right">
+              <StatusBadge :tone="creditRate(m.credits).tone">{{ creditRate(m.credits).text }}</StatusBadge>
+            </TableCell>
+            <TableCell>
+              <StatusBadge :tone="m.supports_images ? 'ok' : 'outline'">{{ visionText(m) }}</StatusBadge>
+            </TableCell>
+            <TableCell class="num text-right text-[0.8rem]">{{ n(m.context_length) }}</TableCell>
+            <TableCell class="num text-right text-[0.8rem]">
+              {{ m.max_output_tokens ? n(m.max_output_tokens) : '—' }}
+            </TableCell>
+            <TableCell class="text-right">
+              <div class="flex items-center justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  :title="`复制 ID：${m.id}`"
+                  :aria-label="`复制 ID：${m.id}`"
+                  @click="copyID(m.id)"
+                >
+                  <Copy class="size-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="更多信息"
+                  aria-label="更多信息"
+                  @click="detail = m"
+                >
+                  <Ellipsis class="size-3.5" />
+                </Button>
               </div>
-            </td>
-          </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </Panel>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>怎么用</h2>
-      </div>
-      <div class="panel-body">
-        <p class="muted" style="margin-top: 0">
-          任何 OpenAI 兼容客户端把 baseURL 指向网关即可，模型名照上面填（点复制按钮拿到的就是完整 id）：
-        </p>
-        <pre style="font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 3px; padding: 12px; overflow-x: auto; margin: 0">baseURL: http://&lt;网关地址&gt;:7863/v1
+    <Panel title="怎么用" class="rise rise-1">
+      <p class="text-[0.8rem] leading-relaxed text-muted-foreground">
+        任何 OpenAI 兼容客户端把 baseURL 指向网关即可，模型名照上面填（点复制按钮拿到的就是完整 id）：
+      </p>
+      <pre class="mono mt-4 overflow-x-auto rounded-md border border-border bg-muted/60 px-4 py-3 text-[0.72rem] leading-relaxed">baseURL: http://&lt;网关地址&gt;:7863/v1
 apiKey:  &lt;调用密钥页里生成的 key&gt;
 model:   {{ sorted[0]?.id || 'cn:deepseek-v4-flash' }}</pre>
-      </div>
-    </section>
-  </div>
+    </Panel>
 
-  <!-- 模型详情弹窗 -->
-  <div v-if="detail" class="modal-backdrop" @click.self="detail = null">
-    <div class="modal" role="dialog" aria-modal="true">
-      <header class="modal-head">
-        <div>
-          <strong>{{ detail.name }}</strong>
-          <div class="mono small muted">{{ detail.id }}</div>
+    <Dialog :open="detail !== null" @update:open="detail = null">
+      <DialogContent class="max-w-2xl">
+        <DialogHeader class="border-b border-border px-6 py-4 pr-14">
+          <DialogTitle>{{ detail?.name }}</DialogTitle>
+          <DialogDescription class="mono text-[0.68rem]">{{ detail?.id }}</DialogDescription>
+        </DialogHeader>
+
+        <div v-if="detail" class="max-h-[68vh] space-y-5 overflow-y-auto px-6 py-5">
+          <section>
+            <h3 class="text-[0.65rem] font-medium tracking-[0.1em] text-muted-foreground">推理档位</h3>
+            <dl class="mt-2 grid gap-x-6 gap-y-2 text-[0.8rem] sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt class="text-muted-foreground">可传档位</dt>
+              <dd>
+                <template v-if="detail.reasoning_supported_efforts?.length">
+                  {{ detail.reasoning_supported_efforts.join(' / ') }}
+                </template>
+                <span v-else class="text-muted-foreground">该模型无档位（不支持传 reasoning_effort）</span>
+              </dd>
+              <dt class="text-muted-foreground">默认档位</dt>
+              <dd>{{ detail.reasoning_default_effort || '—' }}</dd>
+              <dt class="text-muted-foreground">上游默认 effort</dt>
+              <dd>{{ detail.reasoning_effort || '—' }}</dd>
+              <dt class="text-muted-foreground">思考摘要</dt>
+              <dd>{{ detail.reasoning_summary || '—' }}</dd>
+            </dl>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h3 class="text-[0.65rem] font-medium tracking-[0.1em] text-muted-foreground">能力</h3>
+            <ul class="mt-2 divide-y divide-border/70">
+              <li
+                v-for="c in CAPABILITIES"
+                :key="String(c.key)"
+                class="flex items-center gap-3 py-2 text-[0.8rem]"
+                :class="{ 'text-muted-foreground': !detail[c.key] }"
+              >
+                <span
+                  class="grid size-5 shrink-0 place-items-center rounded-full border"
+                  :class="detail[c.key] ? 'border-status-ok/40 bg-status-ok/10 text-status-ok' : 'border-border text-muted-foreground'"
+                >
+                  <Check v-if="detail[c.key]" class="size-3" />
+                  <X v-else class="size-3" />
+                </span>
+                <span class="w-20 shrink-0">{{ c.label }}</span>
+                <span class="text-[0.72rem] text-muted-foreground">{{ c.note }}</span>
+              </li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h3 class="text-[0.65rem] font-medium tracking-[0.1em] text-muted-foreground">其他字段</h3>
+            <dl class="mt-2 grid gap-x-6 gap-y-2 text-[0.8rem] sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt class="text-muted-foreground">域</dt>
+              <dd>{{ realmText(detail.realm) }}</dd>
+              <dt class="text-muted-foreground">积分倍率</dt>
+              <dd>{{ detail.credits || '上游未给' }}</dd>
+              <dt class="text-muted-foreground">上下文长度</dt>
+              <dd>{{ n(detail.context_length) }}</dd>
+              <dt class="text-muted-foreground">单次最大输出</dt>
+              <dd>{{ detail.max_output_tokens ? n(detail.max_output_tokens) : '—' }}</dd>
+              <template v-for="f in extraFields(detail)" :key="f.k">
+                <dt class="mono text-[0.72rem] text-muted-foreground">{{ f.k }}</dt>
+                <dd class="break-words">{{ f.v }}</dd>
+              </template>
+            </dl>
+          </section>
         </div>
-        <span class="spacer"></span>
-        <button class="icon" type="button" title="复制 ID" @click="copyID(detail.id)">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" stroke="currentColor" />
-            <path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5v7A1.5 1.5 0 0 0 4 12h1.5" stroke="currentColor" />
-          </svg>
-        </button>
-        <button class="ghost" type="button" @click="detail = null">关闭</button>
-      </header>
 
-      <div class="modal-body">
-        <h3>推理档位</h3>
-        <dl class="kv">
-          <dt>可传档位</dt>
-          <dd>
-            <template v-if="detail.reasoning_supported_efforts?.length">
-              {{ detail.reasoning_supported_efforts.join(' / ') }}
-            </template>
-            <span v-else class="muted">该模型无档位（不支持传 reasoning_effort）</span>
-          </dd>
-          <dt>默认档位</dt>
-          <dd>{{ detail.reasoning_default_effort || '—' }}</dd>
-          <dt>上游默认 effort</dt>
-          <dd>{{ detail.reasoning_effort || '—' }}</dd>
-          <dt>思考摘要</dt>
-          <dd>{{ detail.reasoning_summary || '—' }}</dd>
-        </dl>
-
-        <h3>能力</h3>
-        <ul class="caps">
-          <li v-for="c in CAPABILITIES" :key="String(c.key)" :class="{ off: !detail[c.key] }">
-            <span class="lamp" :class="detail[c.key] ? 'ok' : 'idle'"></span>
-            <span>{{ c.label }}</span>
-            <span class="muted small">{{ c.note }}</span>
-          </li>
-        </ul>
-
-        <h3>其他字段</h3>
-        <dl class="kv">
-          <dt>域</dt>
-          <dd>{{ realmText(detail.realm) }}</dd>
-          <dt>积分倍率</dt>
-          <dd>{{ detail.credits || '上游未给' }}</dd>
-          <dt>上下文长度</dt>
-          <dd>{{ n(detail.context_length) }}</dd>
-          <dt>单次最大输出</dt>
-          <dd>{{ detail.max_output_tokens ? n(detail.max_output_tokens) : '—' }}</dd>
-          <template v-for="f in extraFields(detail)" :key="f.k">
-            <dt class="mono">{{ f.k }}</dt>
-            <dd>{{ f.v }}</dd>
-          </template>
-        </dl>
-      </div>
-    </div>
+        <DialogFooter class="border-t border-border px-6 py-3.5">
+          <Button variant="outline" size="sm" @click="detail && copyID(detail.id)">
+            <Copy class="size-3.5" />
+            复制 ID
+          </Button>
+          <DialogClose as-child>
+            <Button size="sm">关闭</Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

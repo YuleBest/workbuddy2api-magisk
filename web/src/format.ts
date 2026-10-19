@@ -11,14 +11,6 @@ export function clock(iso?: string): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 本地日期时间 MM-DD HH:mm。 */
-export function stamp(iso?: string): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return '—'
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 /** 相对时间：刚刚 / 3 分钟前 / 2 小时前。 */
 export function ago(iso?: string): string {
   if (!iso) return '—'
@@ -74,14 +66,6 @@ export function cost(v: number): string {
 export function tokens(v: number): string {
   if (v < 0) return '—'
   return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
-}
-
-/** HTTP 状态码 → 语义类名。 */
-export function statusClass(status: number): string {
-  if (status >= 200 && status < 300) return 'ok'
-  if (status >= 400 && status < 500) return 'warn'
-  if (status >= 500) return 'bad'
-  return ''
 }
 
 /** 冷却原因代码 → 中文说明（后端给的是英文枚举/上游原文）。 */

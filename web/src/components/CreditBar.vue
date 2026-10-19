@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 积分条：分段刻度，段数固定便于横向比对不同账号的余量。
-// 相对刻度（max 取池内最高积分）表达"谁更富裕"，绝对数字在右侧以等宽字体给出。
+// 相对刻度（max 取池内最高积分）表达"谁更富裕"，绝对数字在右侧给出。
 import { computed } from 'vue'
 import { n } from '../format'
 
@@ -17,7 +17,7 @@ const filled = computed(() => {
   return ratio > 0 ? Math.max(1, Math.round(ratio * props.segments)) : 0
 })
 
-// 低于总量的 1/5 视为紧张：琥珀色；为 0 用红色（该号已耗尽，等签到恢复）。
+// 低于总量的 1/5 视为紧张：赭色；为 0 用砖红（该号已耗尽，等签到恢复）。
 const tone = computed(() => {
   const max = props.max > 0 ? props.max : props.value
   if (props.value <= 0) return 'empty'
@@ -27,16 +27,16 @@ const tone = computed(() => {
 </script>
 
 <template>
-  <div class="credit">
-    <div class="row">
-      <span class="val">{{ n(value) }}</span>
-      <span class="unit">积分</span>
+  <div class="min-w-[8.5rem]">
+    <div class="flex items-baseline gap-1.5">
+      <span class="num text-[0.95rem] leading-none font-medium">{{ n(value) }}</span>
+      <span class="text-[0.68rem] tracking-[0.08em] text-muted-foreground">积分</span>
     </div>
-    <div class="track" role="img" :aria-label="`剩余 ${n(value)} 积分`">
+    <div class="credit-track mt-2" role="img" :aria-label="`剩余 ${n(value)} 积分`">
       <span
         v-for="i in segments"
         :key="i"
-        class="seg"
+        class="credit-seg"
         :class="{ on: i <= filled, [tone]: tone && i <= filled }"
       ></span>
     </div>

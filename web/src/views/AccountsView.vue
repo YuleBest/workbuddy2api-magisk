@@ -1,13 +1,31 @@
 <script setup lang="ts">
 // 账号池：每个账号一条"仪表条"——状态灯、积分余量、冷却倒计时、在途请求、
-// 以及可执行的动作（禁用/启用/清冷却）。展开可见成本账本与凭证信息。
+// 以及可执行的动作（停用/恢复/复活/清冷却）。展开可见成本账本与凭证信息。
 import { computed, onUnmounted, ref } from 'vue'
+import {
+  ArrowLeft,
+  Ban,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Power,
+  RotateCcw,
+  Snowflake,
+  Users,
+} from '@lucide/vue'
 import { api, type Account } from '../api'
 import { guard, toast } from '../store'
 import { usePolling } from '../composables/usePolling'
 import PageHead from '../components/PageHead.vue'
+import Panel from '../components/Panel.vue'
 import StatusLamp from '../components/StatusLamp.vue'
+import StatusBadge from '../components/StatusBadge.vue'
 import CreditBar from '../components/CreditBar.vue'
+import EmptyState from '../components/EmptyState.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { ago, coolReason, countdown, cost, duration, n } from '../format'
 
 const accounts = ref<Account[]>([])
@@ -50,28 +68,46 @@ function word(a: Account) {
   return a.cooling ? '冷却中' : '可用'
 }
 
-async function act(a: Account, action: 'disable' | 'enable' | 'revive' | 'clear-cooldown') {
-  if (action === 'disable') {
-    const reason = window.prompt('停用原因（会显示在账号条上，方便以后回想）', '手动排查')
-    if (reason === null) return
-    pending.value = a.uid + action
-    const res = await guard(() => api.accountAction(a.uid, action, reason))
-    pending.value = ''
-    if (res) {
-      toast(
-        res.disabled
-          ? `已停用 ${a.nickname || a.uid.slice(0, 8)}；注意它还被系统禁用着，要另外点"复活"`
-          : `已停用 ${a.nickname || a.uid.slice(0, 8)}，不再承接对话流量`,
-      )
-    }
-    return
+const disableTarget = ref<Account | null>(null)
+const disableReason = ref('手动排查')
+const disableOpen = computed({
+  get: () => disableTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) disableTarget.value = null
+  },
+})
+
+function askDisable(a: Account) {
+  disableTarget.value = a
+  disableReason.value = '手动排查'
+}
+
+async function confirmDisable() {
+  const a = disableTarget.value
+  if (!a) return
+  pending.value = a.uid + 'disable'
+  const res = await guard(() => api.accountAction(a.uid, 'disable', disableReason.value.trim()))
+  pending.value = ''
+  if (res) {
+    disableTarget.value = null
+    toast(
+      res.disabled
+        ? `已停用 ${a.nickname || a.uid.slice(0, 8)}；注意它还被系统禁用着，要另外点"复活"`
+        : `已停用 ${a.nickname || a.uid.slice(0, 8)}，不再承接对话流量`,
+    )
   }
+}
+
+async function act(a: Account, action: 'enable' | 'revive' | 'clear-cooldown') {
   pending.value = a.uid + action
   const res = await guard(() => api.accountAction(a.uid, action))
   pending.value = ''
   if (!res) return
   if (action === 'enable') {
-    toast(res.disabled ? '手动停用已解除，但系统禁用位还在——需要点"复活"' : '已放回池子，下一个请求就可能选中它', res.disabled ? 'warn' : 'ok')
+    toast(
+      res.disabled ? '手动停用已解除，但系统禁用位还在——需要点"复活"' : '已放回池子，下一个请求就可能选中它',
+      res.disabled ? 'warn' : 'ok',
+    )
   } else if (action === 'revive') {
     toast('系统禁用位已清除，账号回到选号池')
   } else {
@@ -80,10 +116,10 @@ async function act(a: Account, action: 'disable' | 'enable' | 'revive' | 'clear-
 }
 
 function tokenState(a: Account) {
-  if (!a.expires_in_sec) return { text: '过期时间未知', tone: 'warn' }
-  if (a.expires_in_sec <= 0) return { text: '凭证已过期，下次使用会先刷新', tone: 'bad' }
-  if (a.expires_in_sec < 600) return { text: `${duration(a.expires_in_sec)}后过期`, tone: 'warn' }
-  return { text: `${duration(a.expires_in_sec)}后过期`, tone: 'ok' }
+  if (!a.expires_in_sec) return { text: '过期时间未知', tone: 'warn' as const }
+  if (a.expires_in_sec <= 0) return { text: '凭证已过期，下次使用会先刷新', tone: 'bad' as const }
+  if (a.expires_in_sec < 600) return { text: `${duration(a.expires_in_sec)}后过期`, tone: 'warn' as const }
+  return { text: `${duration(a.expires_in_sec)}后过期`, tone: 'ok' as const }
 }
 </script>
 
@@ -94,160 +130,233 @@ function tokenState(a: Account) {
       lede="网关按积分余量、闲置时长、成功率加权挑号。这里的动作直接改运行中的池状态，不需要重启服务。"
     >
       <template #actions>
-        <span class="muted small">{{ accounts.length }} 个账号</span>
-        <button type="button" @click="$router.push('/overview')">回总览</button>
+        <span class="num text-xs text-muted-foreground">{{ accounts.length }} 个账号</span>
+        <Button as-child variant="outline" size="sm">
+          <RouterLink to="/overview">
+            <ArrowLeft class="size-3.5" />
+            回总览
+          </RouterLink>
+        </Button>
       </template>
     </PageHead>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>池内账号</h2>
-        <span class="note">积分来自上次签到查询，冷却与熔断为实时状态</span>
-      </div>
+    <Panel
+      title="池内账号"
+      note="积分来自上次签到查询，冷却与熔断为实时状态"
+      class="rise"
+      flush
+    >
+      <EmptyState v-if="!accounts.length" :icon="Users" title="还没有账号">
+        在网关主机上跑 <code class="mono">./login.sh</code> 完成一次设备授权登录，凭据会自动落进
+        <code class="mono">auths/</code> 并被池子接管。
+        <template #action>
+          <Button as-child variant="outline" size="sm">
+            <RouterLink to="/overview">看总览</RouterLink>
+          </Button>
+        </template>
+      </EmptyState>
 
-      <div v-if="!accounts.length" class="empty">
-        <strong>还没有账号</strong>
-        在网关主机上跑 <code>./login.sh</code> 完成一次设备授权登录，凭据会自动落进 <code>auths/</code> 并被池子接管。
-      </div>
-
-      <div v-for="a in accounts" :key="a.uid" class="strip" :class="{ 'is-dead': a.disabled, 'is-cooling': a.cooling && !a.disabled }">
-        <div class="ident">
-          <StatusLamp :state="tone(a)" :live="!a.disabled && !a.cooling" />
-          <div class="who">
-            <div class="nick">
-              {{ a.nickname || '未命名账号' }}
-              <span v-if="a.realm" class="tag" style="margin-left: 6px">{{ a.realm === 'global' ? '国际版' : '国内版' }}</span>
+      <article
+        v-for="a in accounts"
+        :key="a.uid"
+        class="border-b border-l-2 border-border/70 px-5 py-4 last:border-b-0 sm:px-6"
+        :class="
+          a.disabled
+            ? 'border-l-status-bad'
+            : a.cooling
+              ? 'border-l-status-warn'
+              : 'border-l-transparent'
+        "
+      >
+        <div class="grid gap-4 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)_auto] sm:items-center">
+          <div class="flex min-w-0 items-start gap-3">
+            <StatusLamp :state="tone(a)" :live="!a.disabled && !a.cooling" class="mt-1.5" />
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <h3 class="font-serif text-[1.02rem] leading-tight">{{ a.nickname || '未命名账号' }}</h3>
+                <StatusBadge v-if="a.realm" tone="outline">
+                  {{ a.realm === 'global' ? '国际版' : '国内版' }}
+                </StatusBadge>
+                <StatusBadge :tone="tone(a)">{{ word(a) }}</StatusBadge>
+              </div>
+              <p class="mono mt-1 truncate text-[0.7rem] text-muted-foreground">{{ a.uid }}</p>
             </div>
-            <div class="uid">{{ a.uid }}</div>
+          </div>
+
+          <CreditBar :value="a.credits" :max="maxCredits" />
+
+          <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+            <Button
+              v-if="!a.manual_disabled"
+              variant="outline"
+              size="sm"
+              :disabled="pending === a.uid + 'disable'"
+              title="把账号摘出选号池，但保留在池里：签到、保活照常，凭证和积分都是活的"
+              @click="askDisable(a)"
+            >
+              <Ban class="size-3.5" />
+              停用
+            </Button>
+            <Button
+              v-else
+              size="sm"
+              :disabled="pending === a.uid + 'enable'"
+              title="解除手动停用"
+              @click="act(a, 'enable')"
+            >
+              <Power class="size-3.5" />
+              恢复
+            </Button>
+            <Button
+              v-if="a.disabled"
+              variant="outline"
+              size="sm"
+              :disabled="pending === a.uid + 'revive'"
+              title="清除系统自动禁用位（12153 / 连续失败）"
+              @click="act(a, 'revive')"
+            >
+              <RotateCcw class="size-3.5" />
+              复活
+            </Button>
+            <Button
+              v-if="a.cooling && !a.disabled"
+              variant="outline"
+              size="sm"
+              :disabled="pending === a.uid + 'clear-cooldown'"
+              title="清掉冷却后，下一个请求可能立刻选中它"
+              @click="act(a, 'clear-cooldown')"
+            >
+              <Snowflake class="size-3.5" />
+              清冷却
+            </Button>
+            <Button variant="ghost" size="sm" @click="expanded[a.uid] = !expanded[a.uid]">
+              {{ expanded[a.uid] ? '收起' : '详情' }}
+              <ChevronUp v-if="expanded[a.uid]" class="size-3.5" />
+              <ChevronDown v-else class="size-3.5" />
+            </Button>
           </div>
         </div>
 
-        <CreditBar :value="a.credits" :max="maxCredits" />
-
-        <div class="strip-actions">
-          <button
-            v-if="!a.manual_disabled"
-            type="button"
-            :disabled="pending === a.uid + 'disable'"
-            title="把账号摘出选号池，但保留在池里：签到、保活照常，凭证和积分都是活的"
-            @click="act(a, 'disable')"
-          >
-            停用
-          </button>
-          <button
-            v-else
-            class="primary"
-            type="button"
-            :disabled="pending === a.uid + 'enable'"
-            title="解除手动停用"
-            @click="act(a, 'enable')"
-          >
-            恢复
-          </button>
-          <button
-            v-if="a.disabled"
-            class="primary"
-            type="button"
-            :disabled="pending === a.uid + 'revive'"
-            title="清除系统自动禁用位（12153 / 连续失败）"
-            @click="act(a, 'revive')"
-          >
-            复活
-          </button>
-          <button
-            v-if="a.cooling && !a.disabled"
-            type="button"
-            :disabled="pending === a.uid + 'clear-cooldown'"
-            title="清掉冷却后，下一个请求可能立刻选中它"
-            @click="act(a, 'clear-cooldown')"
-          >
-            清冷却
-          </button>
-          <button class="ghost" type="button" @click="expanded[a.uid] = !expanded[a.uid]">
-            {{ expanded[a.uid] ? '收起' : '详情' }}
-          </button>
-        </div>
-
-        <div class="strip-meta">
-          <span>
-            状态
-            <span class="num">{{ word(a) }}</span>
+        <div
+          class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[0.75rem] leading-relaxed text-muted-foreground sm:pl-6"
+        >
+          <span class="inline-flex items-center gap-1.5">
+            <Clock class="size-3.5" aria-hidden="true" />
+            <template v-if="a.cooling && !a.disabled">
+              <span class="num text-status-warn">{{ countdown(remainOf(a)) }}</span>
+              后冷却到期
+              <template v-if="a.reason">（{{ coolReason(a.reason) }}）</template>
+              <template v-if="a.soft_streak && a.soft_streak > 1">，第 {{ a.soft_streak }} 次</template>
+            </template>
+            <template v-else>最近成功 {{ ago(a.last_success) }}</template>
           </span>
-          <span v-if="a.cooling && !a.disabled" class="alert">
-            冷却 <span class="num">{{ countdown(remainOf(a)) }}</span> 后到期
-            <template v-if="a.reason">（{{ coolReason(a.reason) }}）</template>
-            <template v-if="a.soft_streak && a.soft_streak > 1">，连续第 {{ a.soft_streak }} 次，退避在加倍</template>
-          </span>
-          <span v-if="a.manual_disabled" class="alert bad">
+          <span v-if="a.manual_disabled" class="text-status-bad">
             手动停用<template v-if="a.manual_reason">：{{ a.manual_reason }}</template>
           </span>
-          <span v-if="a.disabled" class="alert bad">
+          <span v-if="a.disabled" class="text-status-bad">
             系统禁用<template v-if="a.disabled_reason">：{{ a.disabled_reason }}</template>
           </span>
-          <span v-if="a.rate_limited_models?.length" class="alert">
+          <span v-if="a.rate_limited_models?.length">
             限额模型
-            <span class="num">{{ a.rate_limited_models.map((m) => m.model).join(', ') }}</span>
+            <span class="mono text-foreground">{{ a.rate_limited_models.map((m) => m.model).join(', ') }}</span>
           </span>
-          <span v-if="a.degrade_until && new Date(a.degrade_until) > new Date()" class="alert">
+          <span v-if="a.degrade_until && new Date(a.degrade_until) > new Date()" class="text-status-warn">
             连败降权中（连续失败 {{ a.consecutive_fails }} 次）
           </span>
-          <span>
-            在途 <span class="num">{{ a.in_flight }}</span>
-          </span>
-          <span v-if="a.breaker_until && new Date(a.breaker_until) > new Date()" class="alert">
+          <span>在途 <span class="num text-foreground">{{ a.in_flight }}</span></span>
+          <span v-if="a.breaker_until && new Date(a.breaker_until) > new Date()" class="text-status-warn">
             熔断中，连续失败 {{ a.breaker_fails }} 次
           </span>
           <span>
-            成功 <span class="num">{{ n(a.success_count) }}</span>
-            <template v-if="a.err_total">，失败 <span class="num">{{ n(a.err_total) }}</span></template>
+            成功 <span class="num text-foreground">{{ n(a.success_count) }}</span>
+            <template v-if="a.err_total">，失败 <span class="num text-foreground">{{ n(a.err_total) }}</span></template>
           </span>
-          <span>最近成功 {{ ago(a.last_success) }}</span>
         </div>
 
-        <div v-if="expanded[a.uid]" class="strip-meta" style="flex-direction: column; gap: 8px">
-          <div class="kv" style="width: 100%">
-            <dt>凭证状态</dt>
-            <dd :style="tokenState(a).tone === 'bad' ? 'color: var(--bad)' : ''">{{ tokenState(a).text }}</dd>
-            <dt>设备 token</dt>
+        <div
+          v-if="expanded[a.uid]"
+          class="mt-4 rounded-md border border-border bg-muted/35 px-4 py-3 sm:ml-6"
+        >
+          <dl class="grid gap-x-6 gap-y-2.5 text-[0.78rem] sm:grid-cols-[9rem_minmax(0,1fr)]">
+            <dt class="text-muted-foreground">凭证状态</dt>
+            <dd :class="tokenState(a).tone === 'bad' ? 'text-status-bad' : tokenState(a).tone === 'warn' ? 'text-status-warn' : ''">
+              {{ tokenState(a).text }}
+            </dd>
+            <dt class="text-muted-foreground">设备 token</dt>
             <dd>{{ a.has_device_token ? '已配置' : '未配置（部分上游校验会因此更严）' }}</dd>
-            <dt>最近错误</dt>
+            <dt class="text-muted-foreground">最近错误</dt>
             <dd>{{ ago(a.last_err) }}</dd>
-            <dt>成本账本</dt>
-            <dd>
+            <dt class="text-muted-foreground">成本账本</dt>
+            <dd class="space-y-1">
               <template v-if="a.model_costs?.length">
                 <div v-for="c in a.model_costs" :key="c.model">
-                  {{ c.model }} — 每千 token {{ cost(c.cost_per_1k) }} 积分（{{ c.samples }} 次实测）
+                  <span class="mono">{{ c.model }}</span>
+                  — 每千 token {{ cost(c.cost_per_1k) }} 积分（{{ c.samples }} 次实测）
                 </div>
               </template>
-              <span v-else class="muted">暂无观测：该号还没成功跑过带 usage 的请求</span>
+              <span v-else class="text-muted-foreground">暂无观测：该号还没成功跑过带 usage 的请求</span>
             </dd>
-          </div>
+          </dl>
         </div>
-      </div>
-    </section>
+      </article>
+    </Panel>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>状态含义</h2>
-      </div>
-      <div class="panel-body">
-        <dl class="kv">
-          <dt>可用</dt>
-          <dd style="font-family: var(--sans)">可以被选中承载请求。</dd>
-          <dt>冷却中</dt>
-          <dd style="font-family: var(--sans)">上游限流或当日模型用量用尽，到点自动恢复；清冷却只在确认上游已放行时用。</dd>
-          <dt>熔断</dt>
-          <dd style="font-family: var(--sans)">连续失败达到阈值后指数退避，成功一次即清零。</dd>
-          <dt>已停用</dt>
-          <dd style="font-family: var(--sans)">
+    <Panel title="状态含义" class="rise rise-1">
+      <dl class="grid gap-x-10 gap-y-5 md:grid-cols-2">
+        <div>
+          <dt class="font-serif text-[0.92rem]">可用</dt>
+          <dd class="mt-1 text-[0.78rem] leading-relaxed text-muted-foreground">可以被选中承载请求。</dd>
+        </div>
+        <div>
+          <dt class="font-serif text-[0.92rem]">冷却中</dt>
+          <dd class="mt-1 text-[0.78rem] leading-relaxed text-muted-foreground">
+            上游限流或当日模型用量用尽，到点自动恢复；清冷却只在确认上游已放行时用。
+          </dd>
+        </div>
+        <div>
+          <dt class="font-serif text-[0.92rem]">熔断</dt>
+          <dd class="mt-1 text-[0.78rem] leading-relaxed text-muted-foreground">
+            连续失败达到阈值后指数退避，成功一次即清零。
+          </dd>
+        </div>
+        <div>
+          <dt class="font-serif text-[0.92rem]">已停用</dt>
+          <dd class="mt-1 text-[0.78rem] leading-relaxed text-muted-foreground">
             运维主动摘除（手动位）。签到、保活、定时任务照常执行，凭证和积分都是活的；点「恢复」放回池子。
           </dd>
-          <dt>系统禁用</dt>
-          <dd style="font-family: var(--sans)">
-            网关判定账号坏了（连续 12153 / 连败）。与手动停用是两个独立状态位，点「复活」清除；凭证真失效要重新登录才有救。
+        </div>
+        <div>
+          <dt class="font-serif text-[0.92rem]">系统禁用</dt>
+          <dd class="mt-1 text-[0.78rem] leading-relaxed text-muted-foreground">
+            网关判定账号坏了（连续 12153 / 连败）。与手动停用是两个独立状态位，点「复活」清除；
+            凭证真失效要重新登录才有救。
           </dd>
-        </dl>
+        </div>
+      </dl>
+    </Panel>
+
+    <ConfirmDialog
+      v-model:open="disableOpen"
+      title="停用账号"
+      :description="
+        disableTarget
+          ? `把 ${disableTarget.nickname || disableTarget.uid.slice(0, 8)} 摘出选号池。签到、保活和凭证都保留。`
+          : ''
+      "
+      confirm-text="停用"
+      destructive
+      :busy="disableTarget ? pending === disableTarget.uid + 'disable' : false"
+      @confirm="confirmDisable"
+    >
+      <div class="space-y-2">
+        <Label for="disable-reason">停用原因</Label>
+        <Textarea
+          id="disable-reason"
+          v-model="disableReason"
+          rows="3"
+          placeholder="会显示在账号条上，方便以后回想"
+        />
       </div>
-    </section>
+    </ConfirmDialog>
   </div>
 </template>

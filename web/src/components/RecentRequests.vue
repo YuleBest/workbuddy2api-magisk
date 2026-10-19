@@ -1,11 +1,15 @@
 <script setup lang="ts">
 // 最近请求（紧凑表）：总览页的"刚刚发生了什么"。
-// 只读日志接口，和日志页共用同一数据源，样式更省：不显示模型分布等细节。
+// 只读日志接口，和日志页共用同一数据源；样式更省，不展示模型分布等细节。
 import { ref } from 'vue'
+import { Inbox } from '@lucide/vue'
 import { api, type RequestRecord } from '../api'
 import { guard } from '../store'
 import { usePolling } from '../composables/usePolling'
-import { clock, ms, statusClass, tokens } from '../format'
+import { clock, ms, tokens } from '../format'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import StatusBadge from './StatusBadge.vue'
+import EmptyState from './EmptyState.vue'
 
 const props = withDefaults(defineProps<{ limit?: number }>(), { limit: 8 })
 
@@ -19,42 +23,48 @@ usePolling(async () => {
     total.value = res.total
   }
 })
+
+function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
+  if (status >= 200 && status < 300) return 'ok'
+  if (status >= 400 && status < 500) return 'warn'
+  if (status >= 500) return 'bad'
+  return 'idle'
+}
 </script>
 
 <template>
-  <div v-if="rows.length" class="table-scroll">
-    <table class="data recent">
-      <thead>
-        <tr>
-          <th>时间</th>
-          <th>模型</th>
-          <th>账号</th>
-          <th>方式</th>
-          <th class="n">状态</th>
-          <th class="n">首字</th>
-          <th class="n">token</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="r in rows" :key="r.seq">
-          <td class="num">{{ clock(r.time) }}</td>
-          <td class="mono small">{{ r.model }}</td>
-          <td class="small">
-            <span>{{ r.nick || '—' }}</span>
-            <span class="mono muted">（{{ r.uid }}）</span>
-          </td>
-          <td class="small muted">{{ r.mode === 'stream' ? '流式' : '非流式' }}</td>
-          <td class="n">
-            <span class="tag" :class="statusClass(r.status)">{{ r.status || '—' }}</span>
-          </td>
-          <td class="n">{{ ms(r.ttfb_ms) }}</td>
-          <td class="n">{{ tokens(r.tokens) }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <div v-else class="empty">
-    <strong>这个进程还没处理过请求</strong>
+  <Table v-if="rows.length" class="min-w-[38rem]">
+    <TableHeader>
+      <TableRow>
+        <TableHead>时间</TableHead>
+        <TableHead>模型</TableHead>
+        <TableHead>账号</TableHead>
+        <TableHead>方式</TableHead>
+        <TableHead class="text-right">状态</TableHead>
+        <TableHead class="text-right">首字</TableHead>
+        <TableHead class="text-right">token</TableHead>
+      </TableRow>
+    </TableHeader>
+    <TableBody>
+      <TableRow v-for="r in rows" :key="r.seq">
+        <TableCell class="num text-xs text-muted-foreground">{{ clock(r.time) }}</TableCell>
+        <TableCell class="mono text-xs">{{ r.model }}</TableCell>
+        <TableCell class="text-xs">
+          <span>{{ r.nick || '—' }}</span>
+          <span class="mono ml-1 text-[0.68rem] text-muted-foreground">（{{ r.uid }}）</span>
+        </TableCell>
+        <TableCell class="text-xs text-muted-foreground">
+          {{ r.mode === 'stream' ? '流式' : '非流式' }}
+        </TableCell>
+        <TableCell class="text-right">
+          <StatusBadge :tone="toneOf(r.status)">{{ r.status || '—' }}</StatusBadge>
+        </TableCell>
+        <TableCell class="num text-right text-xs">{{ ms(r.ttfb_ms) }}</TableCell>
+        <TableCell class="num text-right text-xs">{{ tokens(r.tokens) }}</TableCell>
+      </TableRow>
+    </TableBody>
+  </Table>
+  <EmptyState v-else :icon="Inbox" title="这个进程还没处理过请求">
     累计 {{ total }} 次调用。客户端请求打进来后，这里会逐条滚动。
-  </div>
+  </EmptyState>
 </template>
