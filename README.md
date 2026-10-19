@@ -3,6 +3,8 @@
 在 Android 手机上以 KernelSU 模块运行 WorkBuddy2API。网关只监听
 `127.0.0.1:7863`，管理后台随服务端二进制一起分发。
 
+上游：Sliverkiss/workbuddy2api -> [YuleBest/workbuddy2api](https://github.com/YuleBest/workbuddy2api) -> [YuleBest/workbuddy2api-magisk](https://github.com/YuleBest/workbuddy2api)
+
 ## 支持范围
 
 - KernelSU
