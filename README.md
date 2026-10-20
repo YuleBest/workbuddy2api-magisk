@@ -5,6 +5,8 @@
 
 上游：Sliverkiss/workbuddy2api -> [YuleBest/workbuddy2api](https://github.com/YuleBest/workbuddy2api) -> [YuleBest/workbuddy2api-magisk](https://github.com/YuleBest/workbuddy2api)
 
+![WorkBuddy2API 管理后台，展示总览、账号池和模型页面](docs/images/admin-panel.jpg)
+
 ## 支持范围
 
 - KernelSU
