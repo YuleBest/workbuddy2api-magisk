@@ -62,10 +62,12 @@ export function cost(v: number): string {
   return v < 0.01 ? v.toFixed(4) : v.toFixed(2)
 }
 
-/** token 数：>=1000 折成 k。 */
+/** token 数：按量级折成 K/M/B，避免大数占满表格。 */
 export function tokens(v: number): string {
   if (v < 0) return '—'
-  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)}B`
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v)
 }
 
 /** 冷却原因代码 → 中文说明（后端给的是英文枚举/上游原文）。 */

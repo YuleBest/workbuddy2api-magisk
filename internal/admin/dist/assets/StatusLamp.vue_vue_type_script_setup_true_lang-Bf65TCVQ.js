@@ -1,1 +1,0 @@
-import{d as a,o as t,a as s,y as n}from"./index-CeXtjZyd.js";const c=a({__name:"StatusLamp",props:{state:{},live:{type:Boolean}},setup(e){return(l,o)=>(t(),s("span",{class:n(["lamp",[e.state,{live:e.live&&e.state==="ok"}]]),"aria-hidden":"true"},null,2))}});export{c as _};

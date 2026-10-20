@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 请求日志：网关进程内最近若干条 chat 请求（内存环形缓冲，重启清零）。
+// 请求日志：持久化的最近 500 条 chat 请求，服务重启后保留。
 // 与 stdout 的表格日志同源，这里多了筛选与排序的便利。
 import { computed, ref } from 'vue'
 import { Inbox, Search, Trash2 } from '@lucide/vue'
@@ -48,7 +48,7 @@ const shown = computed(() => {
     if (!q) return true
     return (
       r.model.toLowerCase().includes(q) ||
-      r.uid.toLowerCase().includes(q) ||
+      (r.nick ?? '').toLowerCase().includes(q) ||
       String(r.status).includes(q)
     )
   })
@@ -68,7 +68,7 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
   <div class="view">
     <PageHead
       title="请求日志"
-      lede="网关进程内存里的最近请求记录，重启即清空。要长期留档就看服务日志（journalctl -u wbapi-gateway）。"
+      lede="持久化保留最近 500 条请求，服务重启后仍可查看。更长期留档看服务日志（journalctl -u wbapi-gateway）。"
     >
       <template #actions>
         <span class="num text-xs text-muted-foreground">累计 {{ n(total) }} 次调用</span>
@@ -109,7 +109,7 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
           v-model="filter"
           type="search"
           class="pl-9"
-          placeholder="按模型名、账号 uid 前 8 位或状态码筛选"
+          placeholder="按模型名、账号昵称或状态码筛选"
         />
       </div>
 
@@ -133,12 +133,12 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
       </dl>
     </Panel>
 
-    <Panel title="记录" note="最新在前" class="rise rise-1" flush>
+    <Panel title="记录" note="最新在前 · 已持久化" class="rise rise-1" flush>
       <EmptyState v-if="!shown.length" :icon="Inbox" :title="rows.length ? '没有符合筛选的记录' : '窗口里还没有请求'">
         {{ rows.length ? '换个关键词，或取消「只看失败」。' : '客户端开始调用 /v1/chat/completions 后，这里会逐条出现。' }}
       </EmptyState>
 
-      <Table v-else class="min-w-[54rem]">
+      <Table v-else class="min-w-[58rem]">
         <TableHeader>
           <TableRow>
             <TableHead class="text-right">#</TableHead>
@@ -149,7 +149,8 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
             <TableHead class="text-right">状态</TableHead>
             <TableHead class="text-right">首字</TableHead>
             <TableHead class="text-right">耗时</TableHead>
-            <TableHead class="text-right">token</TableHead>
+            <TableHead class="text-right">输入</TableHead>
+            <TableHead class="text-right">输出</TableHead>
             <TableHead class="text-right">tok/s</TableHead>
           </TableRow>
         </TableHeader>
@@ -164,15 +165,15 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
               {{ r.mode === 'stream' ? '流式' : '非流式' }}
             </TableCell>
             <TableCell class="text-[0.76rem]">
-              <span>{{ r.nick || '—' }}</span>
-              <span class="mono ml-1 text-[0.68rem] text-muted-foreground">（{{ r.uid }}）</span>
+              {{ r.nick || '未命名账号' }}
             </TableCell>
             <TableCell class="text-right">
               <StatusBadge :tone="toneOf(r.status)">{{ r.status || '—' }}</StatusBadge>
             </TableCell>
             <TableCell class="num text-right text-[0.76rem]">{{ ms(r.ttfb_ms) }}</TableCell>
             <TableCell class="num text-right text-[0.76rem]">{{ ms(r.total_ms) }}</TableCell>
-            <TableCell class="num text-right text-[0.76rem]">{{ tokens(r.tokens) }}</TableCell>
+            <TableCell class="num text-right text-[0.76rem]">{{ tokens(r.prompt_tokens) }}</TableCell>
+            <TableCell class="num text-right text-[0.76rem]">{{ tokens(r.completion_tokens) }}</TableCell>
             <TableCell class="num text-right text-[0.76rem]">
               {{ r.tok_per_sec ? r.tok_per_sec.toFixed(1) : '—' }}
             </TableCell>

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -8,8 +9,8 @@ import (
 // resetMetricsForTest 隔离用例间的全局聚合状态。
 func resetMetricsForTest(t *testing.T) {
 	t.Helper()
-	ResetMetrics()
-	t.Cleanup(ResetMetrics)
+	SetMetricsPersistencePath("")
+	t.Cleanup(func() { SetMetricsPersistencePath("") })
 }
 
 // TestMetricsAggregatesByModel 同一模型的多次请求累加，派生字段按口径折算。
@@ -117,6 +118,68 @@ func TestMetricsResetClears(t *testing.T) {
 	snap := MetricsSnapshotOf()
 	if snap.Total.Requests != 0 || len(snap.Models) != 0 {
 		t.Errorf("重置后 requests=%d models=%d want 0/0", snap.Total.Requests, len(snap.Models))
+	}
+}
+
+func TestMetricsPersistAcrossRestart(t *testing.T) {
+	resetMetricsForTest(t)
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	SetMetricsPersistencePath(path)
+
+	recordChatMetric(&chatStat{
+		model: "model-a", mode: "stream", status: 200,
+		ttfb: time.Second, toks: 30, hasUsage: true, prompt: 120,
+		cacheHit: 80, cacheMiss: 20,
+	}, 4*time.Second)
+
+	SetMetricsPersistencePath("")
+	SetMetricsPersistencePath(path)
+	snap := MetricsSnapshotOf()
+	if snap.Total.Requests != 1 || snap.Total.PromptTokens != 120 || snap.Total.CompletionTokens != 30 {
+		t.Errorf("恢复后 total = %+v", snap.Total)
+	}
+	if len(snap.Models) != 1 || snap.Models[0].Model != "model-a" {
+		t.Fatalf("恢复后 models = %+v", snap.Models)
+	}
+	if snap.TokenSince.IsZero() || snap.TokenSince.After(snap.Now) {
+		t.Errorf("token_since 未恢复：%v", snap.TokenSince)
+	}
+}
+
+func TestResetTokenStatsPreservesNonTokenMetricsAndPersists(t *testing.T) {
+	resetMetricsForTest(t)
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	SetMetricsPersistencePath(path)
+
+	recordChatMetric(&chatStat{
+		model: "model-a", mode: "stream", status: 200,
+		ttfb: time.Second, toks: 30, hasUsage: true, prompt: 120,
+		cacheHit: 80, cacheMiss: 20, cacheWr: 10,
+		credit: 0.5, hasCredit: true,
+	}, 4*time.Second)
+	before := MetricsSnapshotOf()
+
+	ResetTokenStats()
+	after := MetricsSnapshotOf()
+	if after.Total.Requests != before.Total.Requests || after.Total.AvgTTFBMS != before.Total.AvgTTFBMS {
+		t.Errorf("清零 Token 不应重置请求/延迟：before=%+v after=%+v", before.Total, after.Total)
+	}
+	if after.Total.PromptTokens != 0 || after.Total.CompletionTokens != 0 ||
+		after.Total.CacheHitTokens != 0 || after.Total.CacheMissTokens != 0 || after.Total.CacheWriteTokens != 0 {
+		t.Errorf("Token 字段未清零：%+v", after.Total)
+	}
+	if after.Total.Credit != before.Total.Credit {
+		t.Errorf("credit = %v, want preserved %v", after.Total.Credit, before.Total.Credit)
+	}
+
+	SetMetricsPersistencePath("")
+	SetMetricsPersistencePath(path)
+	restored := MetricsSnapshotOf()
+	if restored.Total.PromptTokens != 0 || restored.Total.CompletionTokens != 0 {
+		t.Errorf("重启后又出现 Token：%+v", restored.Total)
+	}
+	if restored.Total.Requests != 1 {
+		t.Errorf("重启后 requests = %d, want 1", restored.Total.Requests)
 	}
 }
 

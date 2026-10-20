@@ -64,7 +64,11 @@ func (s *chatStat) done() {
 	}
 	s.logged = true
 	total := time.Since(s.start)
-	logChatRow(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, s.toks)
+	promptTokens := -1
+	if s.hasUsage {
+		promptTokens = s.prompt
+	}
+	logChatRow(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, promptTokens, s.toks)
 	recordChatMetric(s, total)
 }
 
@@ -248,23 +252,25 @@ func tokPerSec(toks int, total time.Duration) float64 {
 //   - model：模型名（含 realm 前缀），超 chatModelWidth 截断（模型名是 ASCII，字节截即列宽）；
 //   - uid/nick：完整 uid 与账号昵称，经 logfmt.Label 拼成 "昵称(uid8)" 展示——只有
 //     uid8 时人眼无法判断是哪个号，要辨认必须再查 auths/，排障多一跳；
-//   - toks<0 表示 usage 缺失，显示 "-"。
-func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int) {
+//   - promptTokens/completionTokens <0 表示 usage 缺失，显示 "-"。
+func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, promptTokens, completionTokens int) {
 	seq := chatSeq.Add(1)
 	// 入环（管理后台的实时请求列表）：与 stdout 表格同一数据源，但不受 chatLogEnabled
 	// 影响——缓冲是产品能力，stdout 是诊断输出。seq 与打印行共用，编号不跳号。
 	appendRequest(RequestRecord{
-		Seq:     seq,
-		Time:    time.Now(),
-		Model:   model,
-		Mode:    mode,
-		UID:     uidPrefix(uid),
-		Nick:    nick,
-		Status:  status,
-		TTFBMS:  ttfb.Milliseconds(),
-		Tokens:  toks,
-		TotalMS: total.Milliseconds(),
-		TokPS:   tokPerSec(toks, total),
+		Seq:              seq,
+		Time:             time.Now(),
+		Model:            model,
+		Mode:             mode,
+		UID:              uidPrefix(uid),
+		Nick:             nick,
+		Status:           status,
+		TTFBMS:           ttfb.Milliseconds(),
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		Tokens:           completionTokens,
+		TotalMS:          total.Milliseconds(),
+		TokPS:            tokPerSec(completionTokens, total),
 	})
 	if !chatLogEnabled {
 		return
@@ -274,10 +280,10 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status
 	acct := logfmt.Pad(logfmt.Label(uid, nick), chatAcctWidth)
 	tokField := "-"
 	tokpsField := "-"
-	if toks >= 0 {
-		tokField = fmt.Sprintf("%d", toks)
+	if completionTokens >= 0 {
+		tokField = fmt.Sprintf("%d", completionTokens)
 		if total > 0 {
-			tokpsField = fmt.Sprintf("%.1ftok/s", float64(toks)/total.Seconds())
+			tokpsField = fmt.Sprintf("%.1ftok/s", float64(completionTokens)/total.Seconds())
 		} else {
 			tokpsField = "0.0tok/s"
 		}

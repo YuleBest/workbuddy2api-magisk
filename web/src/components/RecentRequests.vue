@@ -50,8 +50,7 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
         <TableCell class="num text-xs text-muted-foreground">{{ clock(r.time) }}</TableCell>
         <TableCell class="mono text-xs">{{ r.model }}</TableCell>
         <TableCell class="text-xs">
-          <span>{{ r.nick || '—' }}</span>
-          <span class="mono ml-1 text-[0.68rem] text-muted-foreground">（{{ r.uid }}）</span>
+          {{ r.nick || '未命名账号' }}
         </TableCell>
         <TableCell class="text-xs text-muted-foreground">
           {{ r.mode === 'stream' ? '流式' : '非流式' }}
@@ -64,7 +63,7 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
       </TableRow>
     </TableBody>
   </Table>
-  <EmptyState v-else :icon="Inbox" title="这个进程还没处理过请求">
-    累计 {{ total }} 次调用。客户端请求打进来后，这里会逐条滚动。
+  <EmptyState v-else :icon="Inbox" title="还没有请求记录">
+    累计 {{ total }} 次调用。客户端请求打进来后，这里会逐条滚动并持久化。
   </EmptyState>
 </template>

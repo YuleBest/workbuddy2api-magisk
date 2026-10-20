@@ -59,6 +59,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   session: () => request<SessionInfo>('/session'),
   overview: () => request<Overview>('/overview'),
+  resetTokenStats: () =>
+    request<{ ok: boolean; since: string }>('/token-stats/reset', { method: 'POST' }),
   accounts: () => request<{ accounts: Account[]; now: string }>('/accounts'),
   keys: () => request<{ keys: KeyInfo[]; file: string; auth_required: boolean }>('/keys'),
   createKey: (note: string) =>
@@ -185,6 +187,8 @@ export interface RequestRecord {
   nick?: string
   status: number
   ttfb_ms: number
+  prompt_tokens: number
+  completion_tokens: number
   tokens: number
   total_ms: number
   tok_per_sec: number
@@ -264,6 +268,18 @@ export interface Overview {
     avg_tokens: number
     last_hour: number
     models: { model: string; count: number }[]
+  }
+  token_stats: {
+    since: string
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    models: Array<{
+      model: string
+      prompt_tokens: number
+      completion_tokens: number
+      total_tokens: number
+    }>
   }
   sticky_sessions: number
   redis_mode: string

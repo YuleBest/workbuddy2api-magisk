@@ -181,8 +181,15 @@ web/src/*.vue ──vite build──▶ internal/admin/dist/ ──go:embed─�
 
 ## 请求日志环形缓冲（internal/server/reqlog.go）
 
-进程内环形缓冲，容量 500，供面板「请求日志」页读。`logChatRow` 在 `chatLogEnabled` 早退**之前**
-就写入缓冲，所以即使关掉 stdout 的表格日志，面板仍有记录；uid 只存前 8 位。
+环形窗口容量 500，供面板「请求日志」页读，并原子持久化到 `state.json` 同目录的
+`requests.json`，服务重启后恢复。`logChatRow` 在 `chatLogEnabled` 早退**之前**就写入缓冲，
+所以即使关掉 stdout 的表格日志，面板仍有记录；uid 只存前 8 位，页面账号列只展示昵称。
+
+## 请求统计持久化（internal/server/metrics.go）
+
+`/v1/stats` 的原始累加器原子写入 `state.json` 同目录的 `metrics.json`，普通重启后恢复。
+总览卡片的“清零”调用 `ResetTokenStats`，只清输入/输出、缓存 Token 和模型 Token 排行，
+保留请求数、失败数、延迟与 credit；清零结果立即落盘，重启不会恢复旧 Token。
 
 ## Windows 部署
 
@@ -201,7 +208,7 @@ web/src/*.vue ──vite build──▶ internal/admin/dist/ ──go:embed─�
 - 后端：`go test ./...`。新增管理接口时在 `internal/admin/admin_test.go` 里加一条 httptest 用例，
   覆盖「无 token 401 / 动作生效 / 未知目标 404」三类断言；面板对话的代理行为在 `internal/admin/chat_test.go`。
 - 密钥读写测试在 `internal/server/keystore_test.go`（新增/掩码/前缀吊销/坏文件不覆盖/热重载）。
-- 请求日志环形缓冲的测试在 `internal/server/reqlog_test.go`（顺序、容量回绕、脱敏）。
+- 请求日志环形缓冲的测试在 `internal/server/reqlog_test.go`（顺序、容量回绕、重启恢复、脱敏）。
 - 请求体归一化测试在 `internal/upstream/zcode_test.go`。
 - 前端：`pnpm build` 内含 `vue-tsc --noEmit` 类型检查；改完 UI 用 `pnpm dev` 或构建后进
   `/admin/` 实际点一遍（尤其动作按钮与空/错状态）。

@@ -8,12 +8,15 @@
 //   - **按模型聚合**：模型名含 realm 前缀原样入键（global:xxx 与裸名分开统计）。
 //   - **有界内存**：模型键数量受上游目录限制（不是无界增长）；另设容量上限兜底，
 //     超限时丢弃新键并记一次 WARN，避免异常模型名刷爆内存。
-//   - **零外部依赖**：纯内存累加，进程重启即清零（since 随进程启动时间）。
+//   - **持久化窗口**：聚合快照原子写入 data/metrics.json，进程重启后恢复。
 package server
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -43,17 +46,178 @@ type modelMetrics struct {
 	lastSeen time.Time
 }
 
-// metricsStore 全局聚合表。
-type metricsStore struct {
-	mu      sync.Mutex
-	since   time.Time
-	byModel map[string]*modelMetrics
-	warned  bool // 容量超限只告警一次，避免刷屏
+type persistedModelMetrics struct {
+	Requests  int64 `json:"requests"`
+	Success   int64 `json:"success"`
+	Failed    int64 `json:"failed"`
+	Streaming int64 `json:"streaming"`
+
+	TTFBSumMS  float64 `json:"ttfb_sum_ms"`
+	TTFBCount  int64   `json:"ttfb_count"`
+	LatSumMS   float64 `json:"latency_sum_ms"`
+	GenSecSum  float64 `json:"generation_seconds"`
+	PromptTok  int64   `json:"prompt_tokens"`
+	CompTok    int64   `json:"completion_tokens"`
+	CacheHit   int64   `json:"cache_hit_tokens"`
+	CacheMiss  int64   `json:"cache_miss_tokens"`
+	CacheWrite int64   `json:"cache_write_tokens"`
+	Credit     float64 `json:"credit"`
+
+	LastSeen time.Time `json:"last_seen"`
 }
 
+type persistedMetrics struct {
+	Since      time.Time                        `json:"since"`
+	TokenSince time.Time                        `json:"token_since"`
+	Models     map[string]persistedModelMetrics `json:"models"`
+}
+
+// metricsStore 全局聚合表。
+type metricsStore struct {
+	mu         sync.Mutex
+	since      time.Time
+	tokenSince time.Time
+	byModel    map[string]*modelMetrics
+	warned     bool // 容量超限只告警一次，避免刷屏
+	path       string
+}
+
+var metricsStarted = time.Now()
+
 var globalMetrics = &metricsStore{
-	since:   time.Now(),
-	byModel: make(map[string]*modelMetrics),
+	since:      metricsStarted,
+	tokenSince: metricsStarted,
+	byModel:    make(map[string]*modelMetrics),
+}
+
+// SetMetricsPersistencePath 设置统计快照文件并恢复上次状态。空路径 = 纯内存模式。
+func SetMetricsPersistencePath(path string) {
+	m := globalMetrics
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	m.since = now
+	m.tokenSince = now
+	m.byModel = make(map[string]*modelMetrics)
+	m.warned = false
+	m.path = path
+	if path == "" {
+		return
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("WARN: [metrics] 恢复失败 path=%s: %v", path, err)
+		}
+		return
+	}
+	var state persistedMetrics
+	if err := json.Unmarshal(raw, &state); err != nil {
+		log.Printf("WARN: [metrics] 解析失败 path=%s: %v", path, err)
+		return
+	}
+	if !state.Since.IsZero() {
+		m.since = state.Since
+	}
+	if !state.TokenSince.IsZero() {
+		m.tokenSince = state.TokenSince
+	} else {
+		m.tokenSince = m.since
+	}
+	for name, saved := range state.Models {
+		if len(m.byModel) >= metricsCap {
+			break
+		}
+		m.byModel[name] = &modelMetrics{
+			requests:   saved.Requests,
+			success:    saved.Success,
+			failed:     saved.Failed,
+			streaming:  saved.Streaming,
+			ttfbSumMS:  saved.TTFBSumMS,
+			ttfbCount:  saved.TTFBCount,
+			latSumMS:   saved.LatSumMS,
+			genSecSum:  saved.GenSecSum,
+			promptTok:  saved.PromptTok,
+			compTok:    saved.CompTok,
+			cacheHit:   saved.CacheHit,
+			cacheMiss:  saved.CacheMiss,
+			cacheWrite: saved.CacheWrite,
+			credit:     saved.Credit,
+			lastSeen:   saved.LastSeen,
+		}
+	}
+}
+
+// persistMetricsLocked 原子写统计快照。调用方必须持有 metricsStore.mu。
+func persistMetricsLocked() {
+	m := globalMetrics
+	if m.path == "" {
+		return
+	}
+	state := persistedMetrics{
+		Since:      m.since,
+		TokenSince: m.tokenSince,
+		Models:     make(map[string]persistedModelMetrics, len(m.byModel)),
+	}
+	for name, mm := range m.byModel {
+		state.Models[name] = persistedModelMetrics{
+			Requests:   mm.requests,
+			Success:    mm.success,
+			Failed:     mm.failed,
+			Streaming:  mm.streaming,
+			TTFBSumMS:  mm.ttfbSumMS,
+			TTFBCount:  mm.ttfbCount,
+			LatSumMS:   mm.latSumMS,
+			GenSecSum:  mm.genSecSum,
+			PromptTok:  mm.promptTok,
+			CompTok:    mm.compTok,
+			CacheHit:   mm.cacheHit,
+			CacheMiss:  mm.cacheMiss,
+			CacheWrite: mm.cacheWrite,
+			Credit:     mm.credit,
+			LastSeen:   mm.lastSeen,
+		}
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("WARN: [metrics] 编码失败 path=%s: %v", m.path, err)
+		return
+	}
+	dir := filepath.Dir(m.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("WARN: [metrics] 创建目录失败 path=%s: %v", dir, err)
+		return
+	}
+	file, err := os.CreateTemp(dir, ".metrics-*.tmp")
+	if err != nil {
+		log.Printf("WARN: [metrics] 创建临时文件失败 path=%s: %v", m.path, err)
+		return
+	}
+	temp := file.Name()
+	defer os.Remove(temp)
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		log.Printf("WARN: [metrics] 设置权限失败 path=%s: %v", temp, err)
+		return
+	}
+	if _, err := file.Write(raw); err != nil {
+		file.Close()
+		log.Printf("WARN: [metrics] 写入失败 path=%s: %v", temp, err)
+		return
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		log.Printf("WARN: [metrics] 同步失败 path=%s: %v", temp, err)
+		return
+	}
+	if err := file.Close(); err != nil {
+		log.Printf("WARN: [metrics] 关闭失败 path=%s: %v", temp, err)
+		return
+	}
+	if err := os.Rename(temp, m.path); err != nil {
+		log.Printf("WARN: [metrics] 替换失败 path=%s: %v", m.path, err)
+	}
 }
 
 // recordChatMetric 把一次请求的观测累加进聚合表。由 chatStat.done() 调用。
@@ -129,17 +293,19 @@ func recordChatMetric(s *chatStat, total time.Duration) {
 	}
 
 	mm.lastSeen = time.Now()
+	persistMetricsLocked()
 }
 
 // MetricsSnapshot 是 /v1/stats 的响应载荷（字段名与社区面板约定一致）。
 type MetricsSnapshot struct {
-	Enabled   bool               `json:"enabled"`
-	Message   string             `json:"message,omitempty"`
-	Since     time.Time          `json:"since"`
-	Now       time.Time          `json:"now"`
-	UptimeSec int64              `json:"uptime_sec"`
-	Total     ModelStatPayload   `json:"total"`
-	Models    []ModelStatPayload `json:"models"`
+	Enabled    bool               `json:"enabled"`
+	Message    string             `json:"message,omitempty"`
+	Since      time.Time          `json:"since"`
+	TokenSince time.Time          `json:"token_since"`
+	Now        time.Time          `json:"now"`
+	UptimeSec  int64              `json:"uptime_sec"`
+	Total      ModelStatPayload   `json:"total"`
+	Models     []ModelStatPayload `json:"models"`
 }
 
 // ModelStatPayload 单模型派生统计。
@@ -183,11 +349,12 @@ func MetricsSnapshotOf() MetricsSnapshot {
 	defer m.mu.Unlock()
 
 	out := MetricsSnapshot{
-		Enabled:   true,
-		Since:     m.since,
-		Now:       now,
-		UptimeSec: int64(now.Sub(m.since).Seconds()),
-		Models:    make([]ModelStatPayload, 0, len(m.byModel)),
+		Enabled:    true,
+		Since:      m.since,
+		TokenSince: m.tokenSince,
+		Now:        now,
+		UptimeSec:  int64(now.Sub(m.since).Seconds()),
+		Models:     make([]ModelStatPayload, 0, len(m.byModel)),
 	}
 
 	// total 由各模型累加得出（与 models 同口径，避免两处算法分叉）。
@@ -268,7 +435,26 @@ func ResetMetrics() {
 	defer m.mu.Unlock()
 	m.byModel = make(map[string]*modelMetrics)
 	m.since = time.Now()
+	m.tokenSince = m.since
 	m.warned = false
+	persistMetricsLocked()
+}
+
+// ResetTokenStats 只清 Token 与缓存观测，保留请求数、延迟和积分统计。
+func ResetTokenStats() {
+	m := globalMetrics
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mm := range m.byModel {
+		mm.genSecSum = 0
+		mm.promptTok = 0
+		mm.compTok = 0
+		mm.cacheHit = 0
+		mm.cacheMiss = 0
+		mm.cacheWrite = 0
+	}
+	m.tokenSince = time.Now()
+	persistMetricsLocked()
 }
 
 // logMetricsCapWarn 容量超限告警（独立函数便于测试替换/断言，也避免 import log 污染

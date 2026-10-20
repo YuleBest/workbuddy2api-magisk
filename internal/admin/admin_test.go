@@ -149,12 +149,71 @@ func TestAdminOverviewShape(t *testing.T) {
 	if _, ok := out["requests"].(map[string]any); !ok {
 		t.Error("缺少 requests 统计段")
 	}
+	tokenStats, ok := out["token_stats"].(map[string]any)
+	if !ok {
+		t.Fatal("缺少 token_stats 统计段")
+	}
+	if _, ok := tokenStats["prompt_tokens"].(float64); !ok {
+		t.Error("token_stats 缺少 prompt_tokens")
+	}
+	if _, ok := tokenStats["completion_tokens"].(float64); !ok {
+		t.Error("token_stats 缺少 completion_tokens")
+	}
+	if _, ok := tokenStats["total_tokens"].(float64); !ok {
+		t.Error("token_stats 缺少 total_tokens")
+	}
+	if _, ok := tokenStats["models"].([]any); !ok {
+		t.Error("token_stats 缺少模型排行 models")
+	}
 	sched, ok := out["schedule"].(map[string]any)
 	if !ok {
 		t.Fatal("缺少 schedule 段")
 	}
 	if sched["checkin"].(map[string]any)["enabled"] != true {
 		t.Errorf("schedule.checkin.enabled 应为 true：%v", sched)
+	}
+}
+
+func TestTokenStatsRanksModelsByTotalTokens(t *testing.T) {
+	since := time.Date(2026, 10, 20, 10, 0, 0, 0, time.Local)
+	got := tokenStats(server.MetricsSnapshot{
+		Since:      since.Add(-time.Hour),
+		TokenSince: since,
+		Total: server.ModelStatPayload{
+			PromptTokens:     130,
+			CompletionTokens: 220,
+			TotalTokens:      350,
+		},
+		Models: []server.ModelStatPayload{
+			{Model: "input-heavy", PromptTokens: 90, CompletionTokens: 5, TotalTokens: 95},
+			{Model: "output-heavy", PromptTokens: 40, CompletionTokens: 215, TotalTokens: 255},
+			{Model: "zero-after-reset", PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
+		},
+	})
+
+	if !got.Since.Equal(since) {
+		t.Errorf("since = %v, want %v", got.Since, since)
+	}
+	if got.PromptTokens != 130 || got.CompletionTokens != 220 || got.TotalTokens != 350 {
+		t.Errorf("total tokens = %d/%d/%d, want 130/220/350", got.PromptTokens, got.CompletionTokens, got.TotalTokens)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models length = %d, want 2（零 Token 模型应过滤）", len(got.Models))
+	}
+	if first := got.Models[0]; first.Model != "output-heavy" || first.PromptTokens != 40 ||
+		first.CompletionTokens != 215 || first.TotalTokens != 255 {
+		t.Errorf("first model = %+v, want output-heavy 40/215/255", first)
+	}
+}
+
+func TestAdminTokenStatsReset(t *testing.T) {
+	h, _, _ := newTestHandler(t, "t")
+	rec := do(t, h, http.MethodPost, "/api/admin/token-stats/reset", "t", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ok := decode(t, rec)["ok"]; ok != true {
+		t.Errorf("reset response = %v, want ok=true", ok)
 	}
 }
 

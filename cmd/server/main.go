@@ -35,6 +35,22 @@ func modelJSONPath(stateFile string) string {
 	return filepath.Join(filepath.Dir(stateFile), "model.json")
 }
 
+// requestLogJSONPath 把持久化请求日志放在 state.json 同目录，跟随现有数据卷。
+func requestLogJSONPath(stateFile string) string {
+	if stateFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(stateFile), "requests.json")
+}
+
+// metricsJSONPath 持久化 /v1/stats 聚合，和请求日志一起跟随数据目录。
+func metricsJSONPath(stateFile string) string {
+	if stateFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(stateFile), "metrics.json")
+}
+
 func main() {
 	timezone.Init()
 
@@ -67,6 +83,8 @@ func main() {
 	// state.json 同风格（Docker volume 持久化路径 ./data）。首次缺失/损坏自动回落
 	// 仓库种子 embed；models.dev 按需拉取成功后原子写回。
 	upstream.SetModelCatalogPath(modelJSONPath(cfg.StateFile))
+	server.SetRequestLogPath(requestLogJSONPath(cfg.StateFile))
+	server.SetMetricsPersistencePath(metricsJSONPath(cfg.StateFile))
 
 	// redisstore：未配置/连接失败 → Noop（纯内存模式，一切功能照常）。
 	store := redisstore.New(cfg.Upstash.URL, cfg.Upstash.Token)

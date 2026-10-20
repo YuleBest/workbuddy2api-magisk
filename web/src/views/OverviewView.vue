@@ -11,6 +11,7 @@ import {
   KeyRound,
   Plane,
   RefreshCw,
+  RotateCcw,
 } from '@lucide/vue'
 import { api, type CheckinOutcome, type Overview, type TaskResult } from '../api'
 import { guard, toast } from '../store'
@@ -21,6 +22,7 @@ import StatusLamp from '../components/StatusLamp.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import RecentRequests from '../components/RecentRequests.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -28,6 +30,8 @@ import { countdown, duration, ms, n, tokens } from '../format'
 
 const data = ref<Overview | null>(null)
 const busyTask = ref('')
+const resetTokenOpen = ref(false)
+const resetTokenBusy = ref(false)
 // 签到回执：同步等待的任务把逐号结果留在页面上，直到用户关掉或再点一次。
 const checkinResult = ref<TaskResult | null>(null)
 
@@ -39,6 +43,7 @@ usePolling(load)
 
 const pool = computed(() => data.value?.pool)
 const req = computed(() => data.value?.requests)
+const token = computed(() => data.value?.token_stats)
 
 const verdict = computed(() => {
   const p = pool.value
@@ -53,6 +58,38 @@ const modelBars = computed(() => {
   const top = models.slice(0, 6)
   const max = top.length > 0 ? top[0].count : 1
   return top.map((m) => ({ ...m, pct: Math.round((m.count / max) * 100) }))
+})
+
+const tokenModels = computed(() => {
+  const models = token.value?.models ?? []
+  const max = Math.max(...models.map((m) => m.total_tokens), 1)
+  return models.map((m) => ({
+    ...m,
+    totalPct: Math.round((m.total_tokens / max) * 100),
+    inputPct: m.total_tokens > 0 ? (m.prompt_tokens / m.total_tokens) * 100 : 0,
+    outputPct: m.total_tokens > 0 ? (m.completion_tokens / m.total_tokens) * 100 : 0,
+  }))
+})
+
+const tokenSplit = computed(() => {
+  const total = token.value?.total_tokens ?? 0
+  return {
+    input: total > 0 ? Math.round(((token.value?.prompt_tokens ?? 0) / total) * 100) : 0,
+    output: total > 0 ? Math.round(((token.value?.completion_tokens ?? 0) / total) * 100) : 0,
+  }
+})
+
+const tokenSince = computed(() => {
+  const raw = token.value?.since
+  if (!raw) return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 })
 
 const tasks = computed(() => {
@@ -95,6 +132,16 @@ async function runTask(key: string) {
     checkinResult.value = res
     void load() // 签到会刷新余额并可能解冻账号，顺手把总览拉新
   }
+}
+
+async function resetTokenStats() {
+  resetTokenBusy.value = true
+  const res = await guard(() => api.resetTokenStats())
+  resetTokenBusy.value = false
+  if (!res) return
+  resetTokenOpen.value = false
+  toast('Token 统计已清零')
+  void load()
 }
 
 const OUTCOME_LABEL: Record<CheckinOutcome['status'], string> = {
@@ -164,17 +211,11 @@ function hoursText(hours: number[]) {
 
     <Panel
       class="rise mb-6"
-      tone="ink"
       title="接活状态"
       :note="data ? `${data.listen}${data.sticky_sessions ? ` · 粘性会话 ${n(data.sticky_sessions)} 个` : ''}` : ''"
     >
       <template #actions>
-        <Button
-          variant="ghost"
-          size="sm"
-          class="text-[color:var(--inverse-fg)] hover:bg-white/10 hover:text-[color:var(--inverse-fg)]"
-          @click="load"
-        >
+        <Button variant="ghost" size="sm" @click="load">
           <RefreshCw class="size-3.5" />
           刷新读数
         </Button>
@@ -188,29 +229,29 @@ function hoursText(hours: number[]) {
               <h2 class="font-serif text-[2.1rem] leading-[1.1] tracking-[-0.02em] sm:text-[2.5rem]">
                 {{ verdict.text }}
               </h2>
-              <p class="mt-1.5 text-[0.8rem] ink-muted">{{ verdict.detail }}</p>
+              <p class="mt-1.5 text-[0.8rem] text-muted-foreground">{{ verdict.detail }}</p>
             </div>
           </div>
 
           <dl class="mt-7 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
             <div>
-              <dt class="text-[0.68rem] tracking-[0.12em] ink-muted">账号总数</dt>
+              <dt class="text-[0.68rem] tracking-[0.12em] text-muted-foreground">账号总数</dt>
               <dd class="num mt-1 font-serif text-[1.7rem] leading-none">{{ n(pool?.total) }}</dd>
             </div>
             <div>
-              <dt class="text-[0.68rem] tracking-[0.12em] ink-muted">可调度</dt>
+              <dt class="text-[0.68rem] tracking-[0.12em] text-muted-foreground">可调度</dt>
               <dd class="num mt-1 font-serif text-[1.7rem] leading-none text-status-ok">
                 {{ n(pool?.healthy) }}
               </dd>
             </div>
             <div>
-              <dt class="text-[0.68rem] tracking-[0.12em] ink-muted">冷却中</dt>
+              <dt class="text-[0.68rem] tracking-[0.12em] text-muted-foreground">冷却中</dt>
               <dd class="num mt-1 font-serif text-[1.7rem] leading-none text-status-warn">
                 {{ n(pool?.cooling) }}
               </dd>
             </div>
             <div>
-              <dt class="text-[0.68rem] tracking-[0.12em] ink-muted">已禁用</dt>
+              <dt class="text-[0.68rem] tracking-[0.12em] text-muted-foreground">已禁用</dt>
               <dd
                 class="num mt-1 font-serif text-[1.7rem] leading-none"
                 :class="pool?.disabled ? 'text-status-bad' : ''"
@@ -221,10 +262,10 @@ function hoursText(hours: number[]) {
           </dl>
         </div>
 
-        <div class="border-t border-[color:var(--inverse-line)] pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-9">
+        <div class="border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-9">
           <div class="flex items-baseline justify-between gap-4">
             <h3 class="font-serif text-[0.95rem]">账号分布</h3>
-            <span class="mono text-[0.62rem] ink-muted">在途 {{ n(pool?.in_flight) }}</span>
+            <span class="mono text-[0.62rem] text-muted-foreground">在途 {{ n(pool?.in_flight) }}</span>
           </div>
 
           <div v-if="data?.accounts.length" class="mt-4 flex flex-col gap-1.5">
@@ -232,26 +273,26 @@ function hoursText(hours: number[]) {
               v-for="a in data.accounts"
               :key="a.uid"
               type="button"
-              class="group flex items-center gap-2.5 rounded-md border border-[color:var(--inverse-line)] px-3 py-2 text-left transition-colors hover:border-[color:var(--inverse-accent)]"
+              class="group flex items-center gap-2.5 rounded-md border border-border bg-muted/35 px-3 py-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/55"
               :title="`${a.nickname || a.uid} — ${stateWord(a.state)}${a.reason ? '：' + a.reason : ''}`"
               @click="$router.push('/accounts')"
             >
               <StatusLamp :state="stateTone(a.state)" :live="a.state === 'healthy'" />
               <span class="min-w-0 flex-1 truncate text-[0.78rem]">
                 {{ a.nickname || a.uid.slice(0, 8) }}
-                <span v-if="a.realm === 'global'" class="text-[0.74rem] ink-muted">（国际版）</span>
+                <span v-if="a.realm === 'global'" class="text-[0.74rem] text-muted-foreground">（国际版）</span>
               </span>
-              <span class="text-[0.72rem] ink-muted">{{ stateWord(a.state) }}</span>
-              <span class="num mono w-16 text-right text-[0.72rem] ink-muted">
+              <span class="text-[0.72rem] text-muted-foreground">{{ stateWord(a.state) }}</span>
+              <span class="num mono w-16 text-right text-[0.72rem] text-muted-foreground">
                 {{ a.state === 'cooling' ? countdown(a.cool_remaining) : `${n(a.credits)} 分` }}
               </span>
             </button>
           </div>
           <div
             v-else
-            class="mt-4 rounded-md border border-dashed border-[color:var(--inverse-line)] px-4 py-5 text-[0.75rem] leading-relaxed ink-muted"
+            class="mt-4 rounded-md border border-dashed border-border px-4 py-5 text-[0.75rem] leading-relaxed text-muted-foreground"
           >
-            <strong class="mb-1 block font-serif text-[0.85rem] text-[color:var(--inverse-fg)]">
+            <strong class="mb-1 block font-serif text-[0.85rem] text-foreground">
               账号池是空的
             </strong>
             在网关主机上执行 <code class="mono">./login.sh</code> 走一次设备授权，凭据落进
@@ -265,7 +306,7 @@ function hoursText(hours: number[]) {
       <Panel title="请求流量" :note="`最近 ${n(req?.window)} 条记录`" class="rise rise-1">
         <dl class="divide-y divide-border/70 text-[0.8rem]">
           <div class="flex items-baseline justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
-            <dt class="text-muted-foreground">进程累计请求</dt>
+            <dt class="text-muted-foreground">累计请求</dt>
             <dd class="num font-medium">{{ n(req?.total) }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-4 py-2.5 first:pt-0 last:pb-0">
@@ -308,6 +349,91 @@ function hoursText(hours: number[]) {
         </EmptyState>
       </Panel>
     </div>
+
+    <Panel
+      title="Token 统计"
+      :note="tokenSince ? `自 ${tokenSince} 起 · 仅统计上游返回 usage 的请求` : '仅统计上游返回 usage 的请求'"
+      class="rise rise-2 mb-6"
+    >
+      <template #actions>
+        <Button variant="outline" size="sm" :disabled="resetTokenBusy" @click="resetTokenOpen = true">
+          <RotateCcw class="size-3.5" />
+          清零
+        </Button>
+      </template>
+
+      <div class="grid gap-8 lg:grid-cols-[minmax(15rem,0.75fr)_minmax(0,1.75fr)] lg:gap-10">
+        <div>
+          <p class="text-[0.68rem] tracking-[0.12em] text-muted-foreground">累计 Token</p>
+          <p class="num mt-2 font-serif text-[2.35rem] leading-none">{{ tokens(token?.total_tokens ?? 0) }}</p>
+
+          <div v-if="token?.total_tokens" class="mt-5">
+            <div class="flex h-2 overflow-hidden rounded-full bg-muted">
+              <div class="bg-chart-1" :style="{ width: `${tokenSplit.input}%` }"></div>
+              <div class="bg-chart-5" :style="{ width: `${tokenSplit.output}%` }"></div>
+            </div>
+            <dl class="mt-5 divide-y divide-border/70 text-[0.8rem]">
+              <div class="flex items-baseline justify-between gap-4 py-2.5 first:pt-0">
+                <dt class="flex items-center gap-2 text-muted-foreground">
+                  <span class="size-2 rounded-sm bg-chart-1" aria-hidden="true"></span>
+                  输入
+                </dt>
+                <dd class="num font-medium">
+                  {{ tokens(token?.prompt_tokens ?? 0) }}
+                  <span class="ml-1 text-[0.7rem] text-muted-foreground">{{ tokenSplit.input }}%</span>
+                </dd>
+              </div>
+              <div class="flex items-baseline justify-between gap-4 py-2.5 last:pb-0">
+                <dt class="flex items-center gap-2 text-muted-foreground">
+                  <span class="size-2 rounded-sm bg-chart-5" aria-hidden="true"></span>
+                  输出
+                </dt>
+                <dd class="num font-medium">
+                  {{ tokens(token?.completion_tokens ?? 0) }}
+                  <span class="ml-1 text-[0.7rem] text-muted-foreground">{{ tokenSplit.output }}%</span>
+                </dd>
+              </div>
+            </dl>
+          </div>
+          <p v-else class="mt-5 text-[0.78rem] leading-relaxed text-muted-foreground">
+            还没有记录到 Token。客户端请求收到上游 usage 后，这里会开始累计。
+          </p>
+        </div>
+
+        <div class="border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-9">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 class="font-serif text-[0.95rem]">模型 Token 排行</h3>
+            <span class="text-[0.68rem] text-muted-foreground">按总量降序 · 前 {{ tokenModels.length || 8 }} 名</span>
+          </div>
+
+          <div v-if="tokenModels.length" class="mt-4 space-y-4">
+            <div v-for="(m, i) in tokenModels" :key="m.model">
+              <div class="flex items-baseline gap-3">
+                <span class="mono w-5 text-[0.68rem] text-muted-foreground">
+                  {{ String(i + 1).padStart(2, '0') }}
+                </span>
+                <span class="mono min-w-0 flex-1 truncate text-[0.72rem]">{{ m.model }}</span>
+                <span class="num shrink-0 text-[0.72rem] font-medium">{{ tokens(m.total_tokens) }}</span>
+              </div>
+              <div class="mt-1.5 ml-8 flex items-center gap-3">
+                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div class="flex h-full rounded-full" :style="{ width: `${m.totalPct}%` }">
+                    <div class="bg-chart-1" :style="{ width: `${m.inputPct}%` }"></div>
+                    <div class="bg-chart-5" :style="{ width: `${m.outputPct}%` }"></div>
+                  </div>
+                </div>
+                <span class="num shrink-0 text-[0.66rem] text-muted-foreground">
+                  入 {{ tokens(m.prompt_tokens) }} · 出 {{ tokens(m.completion_tokens) }}
+                </span>
+              </div>
+            </div>
+          </div>
+          <EmptyState v-else :icon="Boxes" title="还没有模型 Token 记录">
+            收到带 usage 的请求后，这里会按模型累计输入与输出 Token。
+          </EmptyState>
+        </div>
+      </div>
+    </Panel>
 
     <Panel
       title="定时任务"
@@ -397,5 +523,15 @@ function hoursText(hours: number[]) {
       </template>
       <RecentRequests :limit="8" />
     </Panel>
+
+    <ConfirmDialog
+      v-model:open="resetTokenOpen"
+      title="清零 Token 统计？"
+      description="输入、输出 Token 和模型 Token 排行会从当前时刻重新累计。请求日志、请求次数和延迟统计不会被清除。"
+      confirm-text="确认清零"
+      destructive
+      :busy="resetTokenBusy"
+      @confirm="resetTokenStats"
+    />
   </div>
 </template>

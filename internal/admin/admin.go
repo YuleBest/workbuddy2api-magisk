@@ -88,6 +88,7 @@ func NewHandler(cfg Config) *Handler {
 	// 管理 API：全部要求 Bearer token。
 	h.mux.HandleFunc("GET /api/admin/session", h.auth(h.session))
 	h.mux.HandleFunc("GET /api/admin/overview", h.auth(h.overview))
+	h.mux.HandleFunc("POST /api/admin/token-stats/reset", h.auth(h.tokenStatsReset))
 	h.mux.HandleFunc("GET /api/admin/accounts", h.auth(h.accounts))
 	h.mux.HandleFunc("POST /api/admin/accounts/{uid}/disable", h.auth(h.accountDisable))
 	h.mux.HandleFunc("POST /api/admin/accounts/{uid}/enable", h.auth(h.accountEnable))
@@ -179,12 +180,22 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		},
 		"accounts":        brief,
 		"requests":        requestStats(records),
+		"token_stats":     tokenStats(server.MetricsSnapshotOf()),
 		"sticky_sessions": h.sticky(),
 		"redis_mode":      h.cfg.RedisMode,
 		"keys_count":      h.cfg.Keys.Count(),
 		"prompt_mode":     h.cfg.PromptMode,
 		"degraded":        h.degraded(),
 		"schedule":        h.cfg.Schedule,
+	})
+}
+
+// tokenStatsReset 只清输入/输出 Token 与模型 Token 排行，不碰请求日志和其他统计。
+func (h *Handler) tokenStatsReset(w http.ResponseWriter, r *http.Request) {
+	server.ResetTokenStats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"since": server.MetricsSnapshotOf().TokenSince,
 	})
 }
 
@@ -576,6 +587,53 @@ func requestStats(records []server.RequestRecord) map[string]any {
 		"avg_tokens":  avgTokens,
 		"last_hour":   lastHour,
 		"models":      models,
+	}
+}
+
+type tokenModelStat struct {
+	Model            string `json:"model"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type tokenStatsView struct {
+	Since            time.Time        `json:"since"`
+	PromptTokens     int64            `json:"prompt_tokens"`
+	CompletionTokens int64            `json:"completion_tokens"`
+	TotalTokens      int64            `json:"total_tokens"`
+	Models           []tokenModelStat `json:"models"`
+}
+
+func tokenStats(snap server.MetricsSnapshot) tokenStatsView {
+	const modelLimit = 8
+	models := make([]tokenModelStat, 0, len(snap.Models))
+	for _, m := range snap.Models {
+		if m.TotalTokens == 0 {
+			continue
+		}
+		models = append(models, tokenModelStat{
+			Model:            m.Model,
+			PromptTokens:     m.PromptTokens,
+			CompletionTokens: m.CompletionTokens,
+			TotalTokens:      m.TotalTokens,
+		})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].TotalTokens != models[j].TotalTokens {
+			return models[i].TotalTokens > models[j].TotalTokens
+		}
+		return models[i].Model < models[j].Model
+	})
+	if len(models) > modelLimit {
+		models = models[:modelLimit]
+	}
+	return tokenStatsView{
+		Since:            snap.TokenSince,
+		PromptTokens:     snap.Total.PromptTokens,
+		CompletionTokens: snap.Total.CompletionTokens,
+		TotalTokens:      snap.Total.TotalTokens,
+		Models:           models,
 	}
 }
 
