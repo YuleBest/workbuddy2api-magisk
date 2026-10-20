@@ -1,6 +1,6 @@
 id=wb2api
 name=WorkBuddy2API
-version=v0.1.0-beta.2
-versionCode=101
+version=v0.1.0-beta.3
+versionCode=102
 author=YuleBest
 description=在 Android 上以 KernelSU 模块运行 WorkBuddy2API，内置管理后台
