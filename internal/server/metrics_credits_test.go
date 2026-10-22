@@ -171,3 +171,27 @@ func TestStatsCreditsKeyNormalization(t *testing.T) {
 		t.Errorf("weird:hy3 credits = %q, want 空串（未知前缀查不到）", got)
 	}
 }
+
+// TestModelCreditsFor 请求日志复用模型目录只读快照查倍率：命中返回原文，
+// 目录外/缓存冷返回空串（缺失≠免费，不编造）。
+func TestModelCreditsFor(t *testing.T) {
+	resetModelsCache()
+	t.Cleanup(resetModelsCache)
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, fullFieldsModelsBody, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, GlobalEnabled: false})
+	warmCNCatalog(t, h)
+
+	if got := h.modelCreditsFor("cn:hy3"); got != "x0.05" {
+		t.Errorf("cn:hy3 credits = %q, want x0.05", got)
+	}
+	if got := h.modelCreditsFor("hy3"); got != "x0.05" {
+		t.Errorf("bare hy3 credits = %q, want x0.05", got)
+	}
+	if got := h.modelCreditsFor("cn:not-in-catalog"); got != "" {
+		t.Errorf("not-in-catalog credits = %q, want empty", got)
+	}
+}

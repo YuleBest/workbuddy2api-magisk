@@ -78,6 +78,19 @@ func TestUpstreamErrorCodeRewritten(t *testing.T) {
 	}
 }
 
+// DeepSeek Harness 客户端提示词首句含 "DeepSeek Harness"，上游按该词组逐字拦截；
+// 在中间插入零宽空格（U+200B）破坏匹配，视觉与语义不变。
+func TestDeepSeekHarnessRewritten(t *testing.T) {
+	in := "You are DeepSeek Harness, a coding agent."
+	out := sanitizeText(in)
+	if !strings.Contains(out, "DeepSeek\u200BHarness") {
+		t.Errorf("DeepSeek Harness not rewritten: %q", out)
+	}
+	if strings.Contains(out, "DeepSeek Harness") {
+		t.Errorf("original DeepSeek Harness still present: %q", out)
+	}
+}
+
 // 回归：工具调用消息的 content 常为 null，而旧版 sanitizeMessages 在 content 缺失时
 // 直接 continue，整条消息连 tool_calls 一起被跳过 → arguments 里的被拦字符串原样漏出。
 func TestToolCallArgumentsSanitized(t *testing.T) {
@@ -417,8 +430,8 @@ func TestReasoningContentSanitized(t *testing.T) {
 	}
 }
 
-// TestSanitizeLiteralByteExact 逐字节快照护栏：把 sanitizeFeatures 7 项 +
-// sanitizeRewrites 5 对 + 3 个正则的当前字节值硬编码断言。
+// TestSanitizeLiteralByteExact 逐字节快照护栏：把 sanitizeFeatures 8 项 +
+// sanitizeRewrites 6 对 + 3 个正则的当前字节值硬编码断言。
 // 这些字面量是实验逆向出的上游内容审核黑名单（无契约可引用），上游按逐字精确
 // 匹配拦截，一字之差即漏拦（400 code=11128）或误伤。任何未来改动（含看似无害的
 // 统一常量/抽配置）都会先红在本测试——必须走 analysis 报告 #6 的逐字节验证
@@ -426,13 +439,14 @@ func TestReasoningContentSanitized(t *testing.T) {
 // TestSanitize 全族回归，方可同步更新本快照。
 func TestSanitizeLiteralByteExact(t *testing.T) {
 	features := []string{
-		"x-anthropic-billing-header", // header 键值段键名
-		"cc_entrypoint=",             // 尾随裸键值（截断前缀即可命中）
-		"You are Claude Code",        // 身份句（截断前缀即可命中）
-		"Main branch (",              // 注入指令句（截断前缀即可命中）
+		"x-anthropic-billing-header",                      // header 键值段键名
+		"cc_entrypoint=",                                  // 尾随裸键值（截断前缀即可命中）
+		"You are Claude Code",                             // 身份句（截断前缀即可命中）
+		"Main branch (",                                   // 注入指令句（截断前缀即可命中）
 		"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
-		"github.com/anthropics/",     // 反馈句里的 Anthropic 仓库链接
-		"11128",                      // 上游反探测：裸数字错误码
+		"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
+		"11128",                                           // 上游反探测：裸数字错误码
+		"DeepSeek Harness",                                // DeepSeek Harness 提示词首句（上游按整词拦截）
 	}
 	if len(sanitizeFeatures) != len(features) {
 		t.Fatalf("sanitizeFeatures 项数=%d want %d（快照与实现不同步，见测试头注释的验证步骤）", len(sanitizeFeatures), len(features))
@@ -463,6 +477,10 @@ func TestSanitizeLiteralByteExact(t *testing.T) {
 		{
 			"11128",
 			"11-128",
+		},
+		{
+			"DeepSeek Harness",
+			"DeepSeek\u200BHarness",
 		},
 	}
 	if len(sanitizeRewrites) != len(rewrites) {

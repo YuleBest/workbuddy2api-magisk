@@ -21,7 +21,7 @@ import (
 // 复用 ExtractKey 的识别顺序：metadata 优先、snake 优先于 camel）。
 // 与 ExtractKey 的差异：**只认 conversationId，绝不回落 user_id**——X-Conversation-ID
 // 语义是"对话 ID"，user_id 回落会污染后台按对话聚合的判据。
-// 缺失返回 ""（不伪造：透传客户端原值优先，客户端没给就不发）。
+// 缺失返回 ""（透传客户端原值优先；出站头缺失时由 upstream.ChatHeaders 补）。
 func ResolveConversationID(body []byte) string {
 	if len(body) == 0 {
 		return ""

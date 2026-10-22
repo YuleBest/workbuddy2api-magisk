@@ -11,19 +11,19 @@ import Panel from '../components/Panel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ago, clock, ms, n, tokens } from '../format'
+import { ago, clock, cost, creditRate, ms, n, tokens } from '../format'
 
 const rows = ref<RequestRecord[]>([])
 const total = ref(0)
 const capacity = ref(0)
 const limit = ref(200)
 const filter = ref('')
-const onlyFailed = ref(false)
+const modelFilter = ref('all')
+const accountFilter = ref('all')
+const statusFilter = ref('all')
 
 usePolling(async () => {
   const res = await guard(() => api.logs(limit.value))
@@ -41,18 +41,49 @@ const limitValue = computed({
   },
 })
 
+const modelOptions = computed(() => [...new Set(rows.value.map((r) => r.model))].sort())
+
+const accountOptions = computed(() => {
+  const seen = new Map<string, string>()
+  for (const r of rows.value) seen.set(accountKey(r), accountLabel(r))
+  return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'))
+})
+
+const statusOptions = computed(() =>
+  [...new Set(rows.value.map((r) => r.status).filter((s) => s > 0))].sort((a, b) => a - b),
+)
+
 const shown = computed(() => {
   const q = filter.value.trim().toLowerCase()
   return rows.value.filter((r) => {
-    if (onlyFailed.value && r.status > 0 && r.status < 400) return false
+    if (modelFilter.value !== 'all' && r.model !== modelFilter.value) return false
+    if (accountFilter.value !== 'all' && accountKey(r) !== accountFilter.value) return false
+    if (statusFilter.value === 'ok' && !(r.status >= 200 && r.status < 300)) return false
+    if (statusFilter.value === 'failed' && r.status > 0 && r.status < 400) return false
+    if (statusFilter.value !== 'all' && statusFilter.value !== 'ok' && statusFilter.value !== 'failed') {
+      if (String(r.status) !== statusFilter.value) return false
+    }
     if (!q) return true
     return (
       r.model.toLowerCase().includes(q) ||
       (r.nick ?? '').toLowerCase().includes(q) ||
+      (r.uid ?? '').toLowerCase().includes(q) ||
       String(r.status).includes(q)
     )
   })
 })
+
+function accountKey(r: RequestRecord): string {
+  return r.uid || r.nick || '-'
+}
+
+function accountLabel(r: RequestRecord): string {
+  return r.nick || r.uid || '未命名账号'
+}
+
+function accountTitle(r: RequestRecord): string {
+  return r.nick && r.uid ? `${r.nick}（${r.uid}）` : accountLabel(r)
+}
 
 const failedCount = computed(() => rows.value.filter((r) => !(r.status > 0 && r.status < 400)).length)
 
@@ -82,10 +113,6 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
     <Panel title="筛选" class="rise mb-6">
       <template #actions>
         <div class="flex items-center gap-2">
-          <Checkbox id="only-failed" v-model="onlyFailed" />
-          <Label for="only-failed" class="text-[0.72rem]">只看失败</Label>
-        </div>
-        <div class="flex items-center gap-2">
           <span class="text-[0.68rem] text-muted-foreground">条数</span>
           <Select v-model="limitValue">
             <SelectTrigger size="sm" class="w-[4.6rem] text-xs" aria-label="日志条数">
@@ -100,17 +127,63 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
         </div>
       </template>
 
-      <div class="relative max-w-xl">
-        <Search
-          class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-          aria-hidden="true"
-        />
-        <Input
-          v-model="filter"
-          type="search"
-          class="pl-9"
-          placeholder="按模型名、账号昵称或状态码筛选"
-        />
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="w-[12rem]">
+          <span class="mb-1.5 block text-[0.68rem] text-muted-foreground">模型</span>
+          <Select v-model="modelFilter">
+            <SelectTrigger size="sm" class="w-full text-xs" aria-label="按模型筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部模型</SelectItem>
+              <SelectItem v-for="m in modelOptions" :key="m" :value="m">{{ m }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div class="w-[11rem]">
+          <span class="mb-1.5 block text-[0.68rem] text-muted-foreground">账号</span>
+          <Select v-model="accountFilter">
+            <SelectTrigger size="sm" class="w-full text-xs" aria-label="按账号筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部账号</SelectItem>
+              <SelectItem v-for="[key, label] in accountOptions" :key="key" :value="key">{{ label }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div class="w-[9rem]">
+          <span class="mb-1.5 block text-[0.68rem] text-muted-foreground">状态</span>
+          <Select v-model="statusFilter">
+            <SelectTrigger size="sm" class="w-full text-xs" aria-label="按状态筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部状态</SelectItem>
+              <SelectItem value="ok">成功 (2xx)</SelectItem>
+              <SelectItem value="failed">失败 (≥400)</SelectItem>
+              <SelectItem v-for="s in statusOptions" :key="s" :value="String(s)">{{ s }}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div class="min-w-[14rem] flex-1">
+          <span class="mb-1.5 block text-[0.68rem] text-muted-foreground">关键词</span>
+          <div class="relative">
+            <Search
+              class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              v-model="filter"
+              type="search"
+              class="h-8 pl-9"
+              placeholder="模型名、账号或状态码"
+            />
+          </div>
+        </div>
       </div>
 
       <dl class="mt-5 grid grid-cols-3 divide-x divide-border/70 border-t border-border/70 pt-4">
@@ -135,23 +208,25 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
 
     <Panel title="记录" note="最新在前 · 已持久化" class="rise rise-1" flush>
       <EmptyState v-if="!shown.length" :icon="Inbox" :title="rows.length ? '没有符合筛选的记录' : '窗口里还没有请求'">
-        {{ rows.length ? '换个关键词，或取消「只看失败」。' : '客户端开始调用 /v1/chat/completions 后，这里会逐条出现。' }}
+        {{ rows.length ? '换个模型、账号或状态条件。' : '客户端开始调用 /v1/chat/completions 后，这里会逐条出现。' }}
       </EmptyState>
 
-      <Table v-else class="min-w-[58rem]">
+      <Table v-else class="min-w-[58rem] table-fixed [&_td]:px-2 [&_th]:px-2">
         <TableHeader>
           <TableRow>
-            <TableHead class="text-right">#</TableHead>
-            <TableHead>时间</TableHead>
-            <TableHead>模型</TableHead>
-            <TableHead>方式</TableHead>
-            <TableHead>账号</TableHead>
-            <TableHead class="text-right">状态</TableHead>
-            <TableHead class="text-right">首字</TableHead>
-            <TableHead class="text-right">耗时</TableHead>
-            <TableHead class="text-right">输入</TableHead>
-            <TableHead class="text-right">输出</TableHead>
-            <TableHead class="text-right">tok/s</TableHead>
+            <TableHead class="w-12 text-right">#</TableHead>
+            <TableHead class="w-20">时间</TableHead>
+            <TableHead class="w-48">模型</TableHead>
+            <TableHead class="w-14">方式</TableHead>
+            <TableHead class="w-20">账号</TableHead>
+            <TableHead class="w-16 text-right">状态</TableHead>
+            <TableHead class="w-14 text-right">首字</TableHead>
+            <TableHead class="w-14 text-right">耗时</TableHead>
+            <TableHead class="w-14 text-right">输入</TableHead>
+            <TableHead class="w-14 text-right">输出</TableHead>
+            <TableHead class="w-14 text-right">积分</TableHead>
+            <TableHead class="w-16 text-right">倍率</TableHead>
+            <TableHead class="w-16 text-right">tok/s</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -160,12 +235,14 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
             <TableCell class="num whitespace-nowrap text-[0.78rem]" :title="ago(r.time)">
               {{ clock(r.time) }}
             </TableCell>
-            <TableCell class="mono text-[0.74rem]">{{ r.model }}</TableCell>
+            <TableCell class="mono text-[0.74rem]">
+              <span class="block truncate" :title="r.model">{{ r.model }}</span>
+            </TableCell>
             <TableCell class="text-[0.76rem] text-muted-foreground">
               {{ r.mode === 'stream' ? '流式' : '非流式' }}
             </TableCell>
             <TableCell class="text-[0.76rem]">
-              {{ r.nick || '未命名账号' }}
+              <span class="block truncate" :title="accountTitle(r)">{{ accountLabel(r) }}</span>
             </TableCell>
             <TableCell class="text-right">
               <StatusBadge :tone="toneOf(r.status)">{{ r.status || '—' }}</StatusBadge>
@@ -174,6 +251,12 @@ function toneOf(status: number): 'ok' | 'warn' | 'bad' | 'idle' {
             <TableCell class="num text-right text-[0.76rem]">{{ ms(r.total_ms) }}</TableCell>
             <TableCell class="num text-right text-[0.76rem]">{{ tokens(r.prompt_tokens) }}</TableCell>
             <TableCell class="num text-right text-[0.76rem]">{{ tokens(r.completion_tokens) }}</TableCell>
+            <TableCell class="num text-right text-[0.76rem]">
+              {{ r.credit == null ? '—' : cost(r.credit) }}
+            </TableCell>
+            <TableCell class="num text-right text-[0.76rem]" :title="r.credits || undefined">
+              {{ creditRate(r.credits) }}
+            </TableCell>
             <TableCell class="num text-right text-[0.76rem]">
               {{ r.tok_per_sec ? r.tok_per_sec.toFixed(1) : '—' }}
             </TableCell>

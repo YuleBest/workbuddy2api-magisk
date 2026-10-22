@@ -2,11 +2,7 @@
 //
 // 用法（部署后手动触发）：
 //
-//	# 容器内：先 cp 进去再 exec
-//	docker cp activity-run workbuddy2api:/tmp/activity-run
-//	docker exec -w /app workbuddy2api /tmp/activity-run
-//
-//	# 本地：在项目根目录（需 config.json + auths/ + data/）直接 run
+//	# 运行目录：需 config.json + auths/ + data/
 //	go run ./cmd/activity
 //
 //	# 单号模式（实测/消耗类先 1 个号）：uid 前缀过滤，只跑命中账号

@@ -296,7 +296,7 @@ func (p *Pool) saveLocked() {
 
 // notePersistFail 记录一次本地 state.json 落盘失败，并按节流规则决定是否打日志：
 // 首败（状态成功→失败）打一条详细 WARN：包含路径、err、目录权限/属主、当前 uid/gid、
-// 修复建议（chown 或改用 named volume）；随后每 persistLogEvery 次再复报一条，避免刷屏。
+// 修复建议（按运行用户修正属主/权限）；随后每 persistLogEvery 次再复报一条，避免刷屏。
 // 恢复成功的日志由 saveLocked 在成功路径统一打。与 redisstore 三处异步写的
 // "失败仅打日志、不向上抛"范式对齐，但落盘失败对运维是盲区，故多一层节流（notification）。
 func (p *Pool) notePersistFail(err error) {
@@ -311,8 +311,8 @@ func (p *Pool) notePersistFail(err error) {
 }
 
 // persistFailDiag 收集落盘失败时的环境诊断信息：目录是否存在、权限/属主、
-// 当前进程 uid/gid，并给出对齐修复建议。供首错详报，定位 issue #52 这类
-// bind mount 目录属主不匹配导致不可写的场景。
+// 当前进程 uid/gid，并给出对齐修复建议。供首错详报，定位数据目录属主
+// 与网关运行用户不一致导致不可写的场景。
 func persistFailDiag(stateFp string) string {
 	dir := filepath.Dir(stateFp)
 	var b strings.Builder
@@ -330,7 +330,7 @@ func persistFailDiag(stateFp string) string {
 	if uid, gid := os.Getuid(), os.Getgid(); uid >= 0 && gid >= 0 {
 		fmt.Fprintf(&b, " proc_uid=%d proc_gid=%d", uid, gid)
 	}
-	b.WriteString(" fix=chown -R 10001:10001 ./data 或改用 named volume（见 docker-compose.yml）")
+	b.WriteString(" fix=chown -R <service-user>:<service-group> ./data")
 	return b.String()
 }
 

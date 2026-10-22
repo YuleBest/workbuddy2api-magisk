@@ -4,49 +4,40 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-// fakeScriptExec 记录命令构建参数并按需模拟执行失败，替代真实 exec 拉起 python3 子进程。
-type fakeScriptExec struct {
-	lastName string
-	lastArgs []string
-	lastDir  string
-	runN     int
-	err      error
+type fakeTaskExecutor struct {
+	schoolErr   error
+	catErr      error
+	schoolPanic bool
+	catPanic    bool
+	schoolN     int
+	catN        int
+	context     context.Context
 }
 
-func (f *fakeScriptExec) SetDir(dir string) { f.lastDir = dir }
-func (f *fakeScriptExec) Run() error        { f.runN++; return f.err }
-
-// installFakeExec 替换 newScriptCmd，测试结束还原。
-func installFakeExec(t *testing.T) *fakeScriptExec {
-	t.Helper()
-	f := &fakeScriptExec{}
-	orig := newScriptCmd
-	newScriptCmd = func(name string, args ...string) scriptRunner {
-		f.lastName, f.lastArgs = name, args
-		return f
+func (f *fakeTaskExecutor) RunSchool(ctx context.Context, out io.Writer) error {
+	f.schoolN++
+	f.context = ctx
+	if f.schoolPanic {
+		panic("school exploded")
 	}
-	t.Cleanup(func() { newScriptCmd = orig })
-	return f
+	return f.schoolErr
 }
 
-func equalArgs(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+func (f *fakeTaskExecutor) RunCat(ctx context.Context, out io.Writer) error {
+	f.catN++
+	f.context = ctx
+	if f.catPanic {
+		panic("cat exploded")
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return f.catErr
 }
 
 // TestNextWakeSchoolSlot 开学季任务在 school_hours（默认 12 点）处有独立时点。
@@ -85,7 +76,7 @@ func TestNextWakeCatSlot(t *testing.T) {
 	}
 }
 
-// TestNextWakeSchoolCatDisabled 显式禁用 school/cat 后排程只剩签到时点（互不影响）。
+// TestNextWakeSchoolCatDisabled 显式禁用 school/cat 后排程只剩签到时点。
 func TestNextWakeSchoolCatDisabled(t *testing.T) {
 	s := New(Config{
 		CheckinHours:      []int{21},
@@ -106,52 +97,22 @@ func TestNextWakeSchoolCatDisabled(t *testing.T) {
 	}
 }
 
-// TestRunSchoolNowBuildsCommand RunSchoolNow 构造
-// python3 scripts/school_open_day_2026.py ALL --run --yes，工作目录设为仓库根。
-func TestRunSchoolNowBuildsCommand(t *testing.T) {
-	// 防环境泄漏：WB2A_PYTHON 若在测试机已设置会改写 pythonCmd()，使默认值断言失败。
-	t.Setenv("WB2A_PYTHON", "")
-	f := installFakeExec(t)
-	s := New(Config{})
+func TestRunSchoolAndCatUseInjectedExecutor(t *testing.T) {
+	fake := &fakeTaskExecutor{}
+	s := New(Config{TaskExecutor: fake})
 	s.RunSchoolNow()
-	if f.lastName != "python3" {
-		t.Errorf("name=%q want python3", f.lastName)
-	}
-	want := []string{"scripts/school_open_day_2026.py", "ALL", "--run", "--yes"}
-	if !equalArgs(f.lastArgs, want) {
-		t.Errorf("args=%v want %v", f.lastArgs, want)
-	}
-	if f.lastDir != repoRoot() {
-		t.Errorf("dir=%q want repo root %q", f.lastDir, repoRoot())
-	}
-	if _, err := os.Stat(filepath.Join(f.lastDir, "scripts", "school_open_day_2026.py")); err != nil {
-		t.Errorf("仓库根 %q 内应有 scripts/school_open_day_2026.py: %v", f.lastDir, err)
-	}
-}
-
-// TestRunCatNowBuildsCommand RunCatNow 构造
-// python3 scripts/task_runner.py ALL --yes --only black_cat，工作目录为仓库根。
-func TestRunCatNowBuildsCommand(t *testing.T) {
-	t.Setenv("WB2A_PYTHON", "")
-	f := installFakeExec(t)
-	s := New(Config{})
 	s.RunCatNow()
-	want := []string{"scripts/task_runner.py", "ALL", "--yes", "--only", "black_cat"}
-	if f.lastName != "python3" || !equalArgs(f.lastArgs, want) {
-		t.Errorf("cmd=%s %v want python3 %v", f.lastName, f.lastArgs, want)
-	}
-	if f.lastDir != repoRoot() {
-		t.Errorf("dir=%q want repo root %q", f.lastDir, repoRoot())
+	if fake.schoolN != 1 || fake.catN != 1 {
+		t.Fatalf("calls school=%d cat=%d want 1/1", fake.schoolN, fake.catN)
 	}
 }
 
-// TestDispatchSchoolCatAndFailureWarnsOnly dispatch 把 school/cat 分发给对应脚本；
-// 脚本失败只记 WARN（不 panic/不向上抛），且不影响后续任务继续分发。
-func TestDispatchSchoolCatAndFailureWarnsOnly(t *testing.T) {
-	t.Setenv("WB2A_PYTHON", "")
-	f := installFakeExec(t)
-	f.err = errors.New("boom boom")
-	s := New(Config{})
+func TestDispatchSchoolCatFailureWarnsOnly(t *testing.T) {
+	fake := &fakeTaskExecutor{
+		schoolErr: errors.New("school boom"),
+		catErr:    errors.New("cat boom"),
+	}
+	s := New(Config{TaskExecutor: fake})
 
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
@@ -162,42 +123,46 @@ func TestDispatchSchoolCatAndFailureWarnsOnly(t *testing.T) {
 	})
 
 	s.dispatch(context.Background(), taskSchool)
-	if f.runN != 1 || f.lastArgs[0] != "scripts/school_open_day_2026.py" {
-		t.Errorf("dispatch(school) 未执行: runN=%d last=%v", f.runN, f.lastArgs)
-	}
 	s.dispatch(context.Background(), taskCat)
-	if f.runN != 2 || f.lastArgs[0] != "scripts/task_runner.py" {
-		t.Errorf("dispatch(cat) 未执行: runN=%d last=%v", f.runN, f.lastArgs)
+
+	if fake.schoolN != 1 || fake.catN != 1 {
+		t.Fatalf("calls school=%d cat=%d want 1/1", fake.schoolN, fake.catN)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "WARN") || !strings.Contains(out, "scripts/school_open_day_2026.py") {
+	if !strings.Contains(out, "WARN: school: school boom") {
 		t.Errorf("school 失败未按 WARN 记录:\n%s", out)
 	}
-	if !strings.Contains(out, "scripts/task_runner.py") {
+	if !strings.Contains(out, "WARN: cat: cat boom") {
 		t.Errorf("cat 失败未按 WARN 记录:\n%s", out)
 	}
 }
 
-// TestPythonCmd WB2A_PYTHON 覆盖解释器名：缺省/空白回落 "python3"（保持
-// 容器与既有测试的行为不变），显式设置时取其值（Windows 等仅有 python 的环境）。
-func TestPythonCmd(t *testing.T) {
-	t.Setenv("WB2A_PYTHON", "")
-	if got := pythonCmd(); got != "python3" {
-		t.Errorf("default pythonCmd()=%q want python3", got)
+func TestDispatchPassesContext(t *testing.T) {
+	fake := &fakeTaskExecutor{}
+	s := New(Config{TaskExecutor: fake})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.dispatch(ctx, taskSchool)
+	if fake.context != ctx {
+		t.Fatal("dispatch did not pass scheduler context to task executor")
 	}
+}
 
-	t.Setenv("WB2A_PYTHON", "   ")
-	if got := pythonCmd(); got != "python3" {
-		t.Errorf("blank pythonCmd()=%q want python3", got)
-	}
-
-	t.Setenv("WB2A_PYTHON", "python")
-	if got := pythonCmd(); got != "python" {
-		t.Errorf("override pythonCmd()=%q want python", got)
-	}
-
-	t.Setenv("WB2A_PYTHON", "  /usr/bin/python3.10  ")
-	if got := pythonCmd(); got != "/usr/bin/python3.10" {
-		t.Errorf("trim pythonCmd()=%q want /usr/bin/python3.10", got)
+func TestTaskExecutorPanicsBecomeWarnings(t *testing.T) {
+	fake := &fakeTaskExecutor{schoolPanic: true, catPanic: true}
+	s := New(Config{TaskExecutor: fake})
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+	s.dispatch(context.Background(), taskSchool)
+	s.dispatch(context.Background(), taskCat)
+	out := buf.String()
+	if !strings.Contains(out, "panic: school exploded") ||
+		!strings.Contains(out, "panic: cat exploded") {
+		t.Fatalf("panic was not converted to WARN:\n%s", out)
 	}
 }

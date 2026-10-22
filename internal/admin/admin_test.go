@@ -165,6 +165,9 @@ func TestAdminOverviewShape(t *testing.T) {
 	if _, ok := tokenStats["models"].([]any); !ok {
 		t.Error("token_stats 缺少模型排行 models")
 	}
+	if _, ok := tokenStats["accounts"].([]any); !ok {
+		t.Error("token_stats 缺少账号排行 accounts")
+	}
 	sched, ok := out["schedule"].(map[string]any)
 	if !ok {
 		t.Fatal("缺少 schedule 段")
@@ -203,6 +206,26 @@ func TestTokenStatsRanksModelsByTotalTokens(t *testing.T) {
 	if first := got.Models[0]; first.Model != "output-heavy" || first.PromptTokens != 40 ||
 		first.CompletionTokens != 215 || first.TotalTokens != 255 {
 		t.Errorf("first model = %+v, want output-heavy 40/215/255", first)
+	}
+}
+
+func TestTokenStatsRanksAccountsByTotalTokens(t *testing.T) {
+	since := time.Date(2026, 10, 20, 10, 0, 0, 0, time.Local)
+	got := tokenStats(server.MetricsSnapshot{
+		TokenSince: since,
+		Accounts: []server.AccountStatPayload{
+			{UID: "u1", Nick: "甲", PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+			{UID: "u2", Nick: "乙", PromptTokens: 100, CompletionTokens: 200, TotalTokens: 300},
+			{UID: "u3", Nick: "丙", PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
+		},
+	})
+	if len(got.Accounts) != 2 {
+		t.Fatalf("accounts=%d want 2（零 Token 账号应过滤）: %+v", len(got.Accounts), got.Accounts)
+	}
+	first := got.Accounts[0]
+	if first.UID != "u2" || first.Nick != "乙" || first.PromptTokens != 100 ||
+		first.CompletionTokens != 200 || first.TotalTokens != 300 {
+		t.Errorf("first account = %+v, want u2 乙 100/200/300", first)
 	}
 }
 

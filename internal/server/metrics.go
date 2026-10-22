@@ -5,7 +5,8 @@
 //     天然覆盖全路径，不需要在每个 return 前重复记账。
 //   - **只采信上游 usage**：token / cache / credit 一律来自上游末帧 usage，缺失时
 //     用 hasUsage 区分「缺观测」与「显式 0」，不做 rune 估算（与成本账本同纪律）。
-//   - **按模型聚合**：模型名含 realm 前缀原样入键（global:xxx 与裸名分开统计）。
+//   - **按模型 / 账号聚合**：模型名含 realm 前缀原样入键（global:xxx 与裸名分开统计）；
+//     账号按 UID 聚合，昵称随最近一次请求更新，供总览账号 Token 排行。
 //   - **有界内存**：模型键数量受上游目录限制（不是无界增长）；另设容量上限兜底，
 //     超限时丢弃新键并记一次 WARN，避免异常模型名刷爆内存。
 //   - **持久化窗口**：聚合快照原子写入 data/metrics.json，进程重启后恢复。
@@ -66,10 +67,29 @@ type persistedModelMetrics struct {
 	LastSeen time.Time `json:"last_seen"`
 }
 
+// accountMetrics 单账号 Token 累加器（总览 Token 统计的账号维度）。
+// 只采信上游 usage；请求数含无 usage 的请求，Token 字段仅在 hasUsage 时累加。
+type accountMetrics struct {
+	nick      string
+	requests  int64
+	promptTok int64
+	compTok   int64
+	lastSeen  time.Time
+}
+
+type persistedAccountMetrics struct {
+	Nick      string    `json:"nick,omitempty"`
+	Requests  int64     `json:"requests"`
+	PromptTok int64     `json:"prompt_tokens"`
+	CompTok   int64     `json:"completion_tokens"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
 type persistedMetrics struct {
-	Since      time.Time                        `json:"since"`
-	TokenSince time.Time                        `json:"token_since"`
-	Models     map[string]persistedModelMetrics `json:"models"`
+	Since      time.Time                          `json:"since"`
+	TokenSince time.Time                          `json:"token_since"`
+	Models     map[string]persistedModelMetrics   `json:"models"`
+	Accounts   map[string]persistedAccountMetrics `json:"accounts,omitempty"`
 }
 
 // metricsStore 全局聚合表。
@@ -78,6 +98,7 @@ type metricsStore struct {
 	since      time.Time
 	tokenSince time.Time
 	byModel    map[string]*modelMetrics
+	byAccount  map[string]*accountMetrics
 	warned     bool // 容量超限只告警一次，避免刷屏
 	path       string
 }
@@ -88,6 +109,7 @@ var globalMetrics = &metricsStore{
 	since:      metricsStarted,
 	tokenSince: metricsStarted,
 	byModel:    make(map[string]*modelMetrics),
+	byAccount:  make(map[string]*accountMetrics),
 }
 
 // SetMetricsPersistencePath 设置统计快照文件并恢复上次状态。空路径 = 纯内存模式。
@@ -100,6 +122,7 @@ func SetMetricsPersistencePath(path string) {
 	m.since = now
 	m.tokenSince = now
 	m.byModel = make(map[string]*modelMetrics)
+	m.byAccount = make(map[string]*accountMetrics)
 	m.warned = false
 	m.path = path
 	if path == "" {
@@ -147,6 +170,18 @@ func SetMetricsPersistencePath(path string) {
 			lastSeen:   saved.LastSeen,
 		}
 	}
+	for uid, saved := range state.Accounts {
+		if len(m.byAccount) >= metricsCap {
+			break
+		}
+		m.byAccount[uid] = &accountMetrics{
+			nick:      saved.Nick,
+			requests:  saved.Requests,
+			promptTok: saved.PromptTok,
+			compTok:   saved.CompTok,
+			lastSeen:  saved.LastSeen,
+		}
+	}
 }
 
 // persistMetricsLocked 原子写统计快照。调用方必须持有 metricsStore.mu。
@@ -159,6 +194,7 @@ func persistMetricsLocked() {
 		Since:      m.since,
 		TokenSince: m.tokenSince,
 		Models:     make(map[string]persistedModelMetrics, len(m.byModel)),
+		Accounts:   make(map[string]persistedAccountMetrics, len(m.byAccount)),
 	}
 	for name, mm := range m.byModel {
 		state.Models[name] = persistedModelMetrics{
@@ -177,6 +213,15 @@ func persistMetricsLocked() {
 			CacheWrite: mm.cacheWrite,
 			Credit:     mm.credit,
 			LastSeen:   mm.lastSeen,
+		}
+	}
+	for uid, am := range m.byAccount {
+		state.Accounts[uid] = persistedAccountMetrics{
+			Nick:      am.nick,
+			Requests:  am.requests,
+			PromptTok: am.promptTok,
+			CompTok:   am.compTok,
+			LastSeen:  am.lastSeen,
 		}
 	}
 	raw, err := json.Marshal(state)
@@ -233,6 +278,31 @@ func recordChatMetric(s *chatStat, total time.Duration) {
 	m := globalMetrics
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 账号维度独立于模型键容量：先记账，避免模型键超限时漏掉账号排行。
+	uid := s.uid
+	if uid == "" {
+		uid = "-"
+	}
+	am, ok := m.byAccount[uid]
+	if !ok && len(m.byAccount) < metricsCap {
+		am = &accountMetrics{}
+		m.byAccount[uid] = am
+		ok = true
+	}
+	if ok {
+		am.requests++
+		if s.nick != "" {
+			am.nick = s.nick
+		}
+		if s.hasUsage {
+			am.promptTok += int64(s.prompt)
+			if s.toks > 0 {
+				am.compTok += int64(s.toks)
+			}
+		}
+		am.lastSeen = time.Now()
+	}
 
 	mm, ok := m.byModel[model]
 	if !ok {
@@ -298,14 +368,26 @@ func recordChatMetric(s *chatStat, total time.Duration) {
 
 // MetricsSnapshot 是 /v1/stats 的响应载荷（字段名与社区面板约定一致）。
 type MetricsSnapshot struct {
-	Enabled    bool               `json:"enabled"`
-	Message    string             `json:"message,omitempty"`
-	Since      time.Time          `json:"since"`
-	TokenSince time.Time          `json:"token_since"`
-	Now        time.Time          `json:"now"`
-	UptimeSec  int64              `json:"uptime_sec"`
-	Total      ModelStatPayload   `json:"total"`
-	Models     []ModelStatPayload `json:"models"`
+	Enabled    bool                 `json:"enabled"`
+	Message    string               `json:"message,omitempty"`
+	Since      time.Time            `json:"since"`
+	TokenSince time.Time            `json:"token_since"`
+	Now        time.Time            `json:"now"`
+	UptimeSec  int64                `json:"uptime_sec"`
+	Total      ModelStatPayload     `json:"total"`
+	Models     []ModelStatPayload   `json:"models"`
+	Accounts   []AccountStatPayload `json:"accounts"`
+}
+
+// AccountStatPayload 单账号 Token 派生统计（总览账号排行）。
+type AccountStatPayload struct {
+	UID              string     `json:"uid"`
+	Nick             string     `json:"nick,omitempty"`
+	Requests         int64      `json:"requests"`
+	PromptTokens     int64      `json:"prompt_tokens"`
+	CompletionTokens int64      `json:"completion_tokens"`
+	TotalTokens      int64      `json:"total_tokens"`
+	LastSeen         *time.Time `json:"last_seen,omitempty"`
 }
 
 // ModelStatPayload 单模型派生统计。
@@ -341,7 +423,8 @@ type ModelStatPayload struct {
 	LastSeen *time.Time `json:"last_seen,omitempty"`
 }
 
-// MetricsSnapshotOf 生成当前聚合快照。models 按请求数降序（面板表格默认序）。
+// MetricsSnapshotOf 生成当前聚合快照。models 按请求数降序（面板表格默认序），
+// accounts 按总 Token 降序。
 func MetricsSnapshotOf() MetricsSnapshot {
 	now := time.Now()
 	m := globalMetrics
@@ -355,6 +438,7 @@ func MetricsSnapshotOf() MetricsSnapshot {
 		Now:        now,
 		UptimeSec:  int64(now.Sub(m.since).Seconds()),
 		Models:     make([]ModelStatPayload, 0, len(m.byModel)),
+		Accounts:   make([]AccountStatPayload, 0, len(m.byAccount)),
 	}
 
 	// total 由各模型累加得出（与 models 同口径，避免两处算法分叉）。
@@ -381,11 +465,35 @@ func MetricsSnapshotOf() MetricsSnapshot {
 	}
 	out.Total = deriveModelStat("total", &tot)
 
+	for uid, am := range m.byAccount {
+		p := AccountStatPayload{
+			UID:              uid,
+			Nick:             am.nick,
+			Requests:         am.requests,
+			PromptTokens:     am.promptTok,
+			CompletionTokens: am.compTok,
+			TotalTokens:      am.promptTok + am.compTok,
+		}
+		if !am.lastSeen.IsZero() {
+			t := am.lastSeen
+			p.LastSeen = &t
+		}
+		out.Accounts = append(out.Accounts, p)
+	}
 	sort.Slice(out.Models, func(i, j int) bool {
 		if out.Models[i].Requests != out.Models[j].Requests {
 			return out.Models[i].Requests > out.Models[j].Requests
 		}
 		return out.Models[i].Model < out.Models[j].Model
+	})
+	sort.Slice(out.Accounts, func(i, j int) bool {
+		if out.Accounts[i].TotalTokens != out.Accounts[j].TotalTokens {
+			return out.Accounts[i].TotalTokens > out.Accounts[j].TotalTokens
+		}
+		if out.Accounts[i].Nick != out.Accounts[j].Nick {
+			return out.Accounts[i].Nick < out.Accounts[j].Nick
+		}
+		return out.Accounts[i].UID < out.Accounts[j].UID
 	})
 	return out
 }
@@ -434,13 +542,14 @@ func ResetMetrics() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.byModel = make(map[string]*modelMetrics)
+	m.byAccount = make(map[string]*accountMetrics)
 	m.since = time.Now()
 	m.tokenSince = m.since
 	m.warned = false
 	persistMetricsLocked()
 }
 
-// ResetTokenStats 只清 Token 与缓存观测，保留请求数、延迟和积分统计。
+// ResetTokenStats 只清 Token 与缓存观测（含账号维度 Token），保留请求数、延迟和积分统计。
 func ResetTokenStats() {
 	m := globalMetrics
 	m.mu.Lock()
@@ -452,6 +561,10 @@ func ResetTokenStats() {
 		mm.cacheHit = 0
 		mm.cacheMiss = 0
 		mm.cacheWrite = 0
+	}
+	for _, am := range m.byAccount {
+		am.promptTok = 0
+		am.compTok = 0
 	}
 	m.tokenSince = time.Now()
 	persistMetricsLocked()

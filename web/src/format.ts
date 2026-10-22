@@ -62,6 +62,14 @@ export function cost(v: number): string {
   return v < 0.01 ? v.toFixed(4) : v.toFixed(2)
 }
 
+/** 积分倍率原文 → 紧凑的 "x0.05"；缺失显示 —，形态不认识时原样展示。 */
+export function creditRate(raw?: string): string {
+  const v = (raw ?? '').trim()
+  if (!v) return '—'
+  const hit = /x\s*([0-9]+(?:\.[0-9]+)?)/i.exec(v)
+  return hit ? `x${Number(hit[1]).toFixed(2)}` : v
+}
+
 /** token 数：按量级折成 K/M/B，避免大数占满表格。 */
 export function tokens(v: number): string {
   if (v < 0) return '—'

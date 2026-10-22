@@ -17,7 +17,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -190,7 +189,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tokenStatsReset 只清输入/输出 Token 与模型 Token 排行，不碰请求日志和其他统计。
+// tokenStatsReset 只清输入/输出 Token 与模型/账号 Token 排行，不碰请求日志和其他统计。
 func (h *Handler) tokenStatsReset(w http.ResponseWriter, r *http.Request) {
 	server.ResetTokenStats()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -355,10 +354,6 @@ func (h *Handler) runTask(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("task")
 	if h.cfg.Scheduler == nil {
 		writeErr(w, http.StatusServiceUnavailable, "scheduler_disabled", "调度器未启用")
-		return
-	}
-	if (name == "school" || name == "cat") && os.Getenv("WB2A_PYTHON_TASKS") == "0" {
-		writeErr(w, http.StatusNotImplemented, "python_task_disabled", "Android 版不包含该 Python 任务")
 		return
 	}
 	if name == "checkin" && r.URL.Query().Get("wait") == "1" {
@@ -597,16 +592,26 @@ type tokenModelStat struct {
 	TotalTokens      int64  `json:"total_tokens"`
 }
 
+type tokenAccountStat struct {
+	UID              string `json:"uid"`
+	Nick             string `json:"nick,omitempty"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
 type tokenStatsView struct {
-	Since            time.Time        `json:"since"`
-	PromptTokens     int64            `json:"prompt_tokens"`
-	CompletionTokens int64            `json:"completion_tokens"`
-	TotalTokens      int64            `json:"total_tokens"`
-	Models           []tokenModelStat `json:"models"`
+	Since            time.Time          `json:"since"`
+	PromptTokens     int64              `json:"prompt_tokens"`
+	CompletionTokens int64              `json:"completion_tokens"`
+	TotalTokens      int64              `json:"total_tokens"`
+	Models           []tokenModelStat   `json:"models"`
+	Accounts         []tokenAccountStat `json:"accounts"`
 }
 
 func tokenStats(snap server.MetricsSnapshot) tokenStatsView {
 	const modelLimit = 8
+	const accountLimit = 8
 	models := make([]tokenModelStat, 0, len(snap.Models))
 	for _, m := range snap.Models {
 		if m.TotalTokens == 0 {
@@ -628,12 +633,39 @@ func tokenStats(snap server.MetricsSnapshot) tokenStatsView {
 	if len(models) > modelLimit {
 		models = models[:modelLimit]
 	}
+
+	accounts := make([]tokenAccountStat, 0, len(snap.Accounts))
+	for _, a := range snap.Accounts {
+		if a.TotalTokens == 0 {
+			continue
+		}
+		accounts = append(accounts, tokenAccountStat{
+			UID:              a.UID,
+			Nick:             a.Nick,
+			PromptTokens:     a.PromptTokens,
+			CompletionTokens: a.CompletionTokens,
+			TotalTokens:      a.TotalTokens,
+		})
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		if accounts[i].TotalTokens != accounts[j].TotalTokens {
+			return accounts[i].TotalTokens > accounts[j].TotalTokens
+		}
+		if accounts[i].Nick != accounts[j].Nick {
+			return accounts[i].Nick < accounts[j].Nick
+		}
+		return accounts[i].UID < accounts[j].UID
+	})
+	if len(accounts) > accountLimit {
+		accounts = accounts[:accountLimit]
+	}
 	return tokenStatsView{
 		Since:            snap.TokenSince,
 		PromptTokens:     snap.Total.PromptTokens,
 		CompletionTokens: snap.Total.CompletionTokens,
 		TotalTokens:      snap.Total.TotalTokens,
 		Models:           models,
+		Accounts:         accounts,
 	}
 }
 

@@ -36,6 +36,10 @@
 所有持久数据和日志都在模块目录内。安装升级时会保留 `config.json`、
 `keys.json`、`auths/`、`data/` 和 `logs/`。卸载模块会删除全部数据。
 
+`bin/wbapi` 是 Android 专用 CLI（源码在 `cmd/wbapi-android`），会拒绝配置中
+指向模块目录外的 `auth_dir`、`keys_file` 和 `state_file`。桌面版 CLI 位于
+`internal/wbapicli`，不参与模块构建。
+
 ## 首次使用
 
 重启后可以点击模块的“操作”按钮。`action.sh` 会先启动网关，再打开
@@ -59,7 +63,7 @@ wbapi status [--json]
 wbapi accounts
 wbapi quota [test [模型]]
 wbapi acct list|disable|enable|revive
-wbapi task checkin|activity|travel|keepalive [--wait]
+wbapi task checkin|activity|travel|keepalive|school|cat [--wait]
 wbapi key list|new|revoke
 wbapi models [--realm cn|global]
 wbapi stats [--reset]
@@ -76,15 +80,24 @@ CLI 不依赖 Python、systemd、journalctl 或 Docker。服务使用模块内�
 
 ## 自动任务
 
-安卓版不启动自动调度。`service.sh` 会设置：
+安卓版不启动自动调度，`service.sh` 会设置：
 
 ```sh
 WB2A_SCHEDULER=0
-WB2A_PYTHON_TASKS=0
 ```
 
-因此签到、旅行、活跃上报、保活不会自动运行。CLI 仍可手动触发前四类 Go
-任务；`school` 和 `cat` 因为依赖 Python，在安卓版不可用。
+签到、旅行、活跃上报、保活、开学季和夜猫子都不会自动运行，但可以在管理
+面板或 CLI 里按需触发：
+
+```bash
+$WBAPI task checkin
+$WBAPI task school
+$WBAPI task cat
+```
+
+所有任务都由 `internal/tasks` 的 Go 实现执行，不依赖 Python。若确实需要自动
+调度，可以删掉 `service.sh` 中的 `WB2A_SCHEDULER=0`，再在 `config.json` 的
+`schedule` 段按任务开启。
 
 ## 构建
 
@@ -107,7 +120,7 @@ make test
 
 ```text
 build/stage/
-build/wb2api-v0.1.0-arm64-v8a.zip
+build/wb2api-v0.2.0-beta.1-arm64-v8a.zip
 ```
 
 ## 验证

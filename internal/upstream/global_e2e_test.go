@@ -277,7 +277,7 @@ func TestGlobalE2EProbeChatVariants(t *testing.T) {
 			r.Header.Set("X-Agent-Purpose", "conversation")
 			r.Header.Set("X-IDE-Name", "WorkBuddy")
 			r.Header.Set("X-IDE-Type", "WorkBuddy")
-			r.Header.Set("X-IDE-Version", "5.5.4")
+			r.Header.Set("X-IDE-Version", "5.8.4")
 			r.Header.Set("X-Product", "WorkBuddy")
 		}},
 		{"no-content-type", "gpt-5.4", func(r *http.Request) { r.Header.Del("Content-Type") }},
@@ -701,5 +701,5 @@ func TestGlobalE2EGatewayChat(t *testing.T) {
 		}
 		t.Logf("  非 2xx body: %s", bodyStr)
 	}
-	t.Logf("  注#10: 选号/出站域/日志见容器 docker logs（uid 见 auths/ 下 global 账号，host workbuddy.ai）")
+	t.Logf("  注#10: 选号/出站域/日志见网关服务日志（uid 见 auths/ 下 global 账号，host workbuddy.ai）")
 }

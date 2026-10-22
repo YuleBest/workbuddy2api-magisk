@@ -23,6 +23,7 @@ import (
 type Config struct {
 	Pool           *pool.Pool
 	Upstream       *upstream.Client
+	TaskExecutor   TaskExecutor
 	CheckinHours   []int // 默认 [9, 21]
 	TravelHours    []int // 默认 [9,21]：一趟派出 + 一趟领奖闭环
 	ActivityHours  []int // 默认 [10]
@@ -100,7 +101,7 @@ func New(cfg Config) *Scheduler {
 }
 
 // checkinRefreshSkew 签到前判定"token 是否临近过期"的时间窗口（10 分钟）。
-// 长时间停机/容器长期停跑后 access token 往往已过期，不先刷新则签到必然 401 白跑。
+// 长时间停机/进程长期停跑后 access token 往往已过期，不先刷新则签到必然 401 白跑。
 const checkinRefreshSkew = 10 * time.Minute
 
 // CheckinStatus 单账号签到结果状态。
@@ -268,9 +269,9 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 	wg.Wait()
 }
 
-// dispatch 按任务类型分发到对应执行函数。脚本类（school/cat）失败只记 WARN、
+// dispatch 按任务类型分发到对应执行函数。任务系统（school/cat）失败只记 WARN、
 // 不影响其余任务继续执行（与现有各任务"单账号失败不阻断遍历"同口径）。
-// ctx 传导给带账号间限速的遍历（取消时立即放弃剩余账号），纯脚本类任务不感知。
+// ctx 传导给带账号间限速和任务系统的遍历。
 func (s *Scheduler) dispatch(ctx context.Context, k taskKind) {
 	switch k {
 	case taskCheckin:
@@ -282,9 +283,9 @@ func (s *Scheduler) dispatch(ctx context.Context, k taskKind) {
 	case taskKeepalive:
 		s.RunKeepaliveNow()
 	case taskSchool:
-		s.RunSchoolNow()
+		s.runSchool(ctx)
 	case taskCat:
-		s.RunCatNow()
+		s.runCat(ctx)
 	}
 }
 
@@ -334,7 +335,7 @@ func (s *Scheduler) CheckinAll() ([]CheckinOutcome, error) {
 			out = append(out, oc)
 			continue
 		}
-		// 停机跨过 token 有效期（关机过夜/容器长期停跑）时先补一次刷新，否则签到必然 401 白跑。
+		// 停机跨过 token 有效期（关机过夜/进程长期停跑）时先补一次刷新，否则签到必然 401 白跑。
 		if a.NeedsRefresh(checkinRefreshSkew) {
 			if err := s.cfg.Upstream.RefreshToken(a); err != nil {
 				log.Printf("checkin %s refresh: %v", logfmt.Label(st.UID, st.Nickname), err)

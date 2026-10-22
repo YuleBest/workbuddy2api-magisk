@@ -37,7 +37,7 @@ type Config struct {
 
 	// Admin 运维管理端点 + Web 管理后台开关（issue #138/#118）。默认**关闭**：管理能力
 	// 默认不暴露，避免「开了网关就等于开了账号管理面」。开启后可用：
-	//   - /admin/accounts/{uid}/{disable,enable,revive}（JSON 端点，acct.sh / cmd/acct 走这里）
+	//   - /admin/accounts/{uid}/{disable,enable,revive}（JSON 端点，cmd/acct / wbapi acct 走这里）
 	//   - /admin/ 与 /api/admin/*（Web 后台：观测 + 同一批运维动作）
 	// 鉴权与 /status 同源（withAuth + 同一个 api_key，不另立管理密钥）。
 	Admin struct {
@@ -74,15 +74,15 @@ type Config struct {
 		// 自定义值改写。
 		UserAgent string `json:"user_agent"`
 		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与白名单
-		// 头组 X-IDE-Version 的取值）。空 = 内置默认（对齐官方 5.5.4 分发包）；
+		// 头组 X-IDE-Version 的取值）。空 = 按 realm 取内置默认（CN 5.8.3 / global 5.8.4）；
 		// 显式配置（如升级后的桌面包版本）则随配置走。
 		ClientVersion string `json:"client_version"`
 		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认（对齐官方内置 CLI
-		// 2.137.1）；显式配置则随配置走。
+		// 2.161.0）；显式配置则随配置走。
 		CliVersion string `json:"cli_version"`
 
 		// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底。
-		// 容器内无桌面端 Turing SDK，这是把外部生成的 token 注入的入口；空 = 不注入。
+		// 无桌面端 Turing SDK 时，这是把外部生成的 token 注入的入口；空 = 不注入。
 		// 每号覆盖优先级：auths 文件 device_token > 本全局值 > DeviceTokenFile（文件兜底）。
 		DeviceToken string `json:"device_token"`
 		// DeviceTokenFile 宿主落盘的 device token 文件路径（可选，空 = 不读文件）。

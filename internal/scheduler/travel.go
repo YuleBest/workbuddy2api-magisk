@@ -50,7 +50,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // cstZone 上游每日重置按自然日 00:00 CST（Asia/Shanghai）。中国无夏令时，固定 +8 即可，
-// 不依赖容器 tzdata。
+// 不依赖系统 tzdata。
 var cstZone = time.FixedZone("CST", 8*60*60)
 
 // travelDay 返回 t 所属的上游自然日（CST），格式 2006-01-02。

@@ -190,6 +190,10 @@ export interface RequestRecord {
   prompt_tokens: number
   completion_tokens: number
   tokens: number
+  /** 本次实际积分消耗；省略 = 上游 usage 未带 credit（缺失≠0）。 */
+  credit?: number
+  /** 模型积分倍率原文（CN 形如 "x0.05"，global 带 " credits" 后缀）；省略 = 目录未收录/缓存冷。 */
+  credits?: string
   total_ms: number
   tok_per_sec: number
 }
@@ -276,6 +280,13 @@ export interface Overview {
     total_tokens: number
     models: Array<{
       model: string
+      prompt_tokens: number
+      completion_tokens: number
+      total_tokens: number
+    }>
+    accounts: Array<{
+      uid: string
+      nick?: string
       prompt_tokens: number
       completion_tokens: number
       total_tokens: number

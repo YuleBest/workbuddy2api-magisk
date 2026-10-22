@@ -13,6 +13,28 @@ import (
 	"workbuddy2api/internal/upstream"
 )
 
+func TestCreditPrettyMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		program string
+		args    []string
+		want    bool
+	}{
+		{name: "binary default json", program: "credit", want: false},
+		{name: "binary pretty", program: "credit", args: []string{"-pretty"}, want: true},
+		{name: "wrapper default pretty", program: "credit.sh", want: true},
+		{name: "wrapper json", program: "credit.sh", args: []string{"-json"}, want: false},
+		{name: "wrapper ignores unknown", program: "credit.sh", args: []string{"anything"}, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := creditPrettyMode(tc.program, tc.args); got != tc.want {
+				t.Fatalf("creditPrettyMode(%q, %v)=%v want %v", tc.program, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 // fakeUpstreamCredit 构造一个记录每个账号出站 host/path 的 fake upstream。
 // ResourceSummary 走 billingMeterJSON → billingJSON → c.HTTP.Do，因此注入 Transport
 // 即可捕获 realm 路由（base 由 billingBase(a) 决定）。
@@ -183,6 +205,7 @@ func TestCollectEmptyTokenFileSkipped(t *testing.T) {
 		t.Errorf("accounts=%+v want 0（空 token 文件被 Parse 跳过）", accounts)
 	}
 }
+
 // TestCollectLoadsNonHyphenAuthFile (P2-10 RED)：collect 此前私用
 // workbuddy-*.json 窄 glob，不带连字符的文件被跳过；改为 auth.LoadAuthFiles
 // 后应与网关口径一致（宽侧 workbuddy*.json）。

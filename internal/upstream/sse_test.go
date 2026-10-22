@@ -1036,3 +1036,32 @@ func TestAggregateNonDeltaMessageContentNotDuplicated(t *testing.T) {
 		t.Errorf("content=%q want %q（message 回退分支应只采一次）", msg["content"], "abc")
 	}
 }
+
+// TestStreamDropsSSEComments 上游 ": heartbeat" 是 SSE 注释行，按规范无数据语义，
+// 不得透传给客户端——否则客户端会把它当 JSON 解析并报
+// `Unexpected token ':', ": heartbeat" is not valid JSON`。
+func TestStreamDropsSSEComments(t *testing.T) {
+	raw := ": heartbeat\n\n" +
+		"data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+		": heartbeat\n\n" +
+		"data: [DONE]\n\n"
+	rec := httptest.NewRecorder()
+	if err := Stream(rec, strings.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, ": heartbeat") {
+		t.Errorf("SSE comment leaked to client: %q", body)
+	}
+	if !strings.Contains(body, "hi") {
+		t.Errorf("data frame dropped: %q", body)
+	}
+	if n := strings.Count(body, "data: [DONE]"); n != 1 {
+		t.Errorf("[DONE] count=%d want 1: %q", n, body)
+	}
+	for _, ln := range strings.Split(strings.TrimRight(body, "\n"), "\n") {
+		if ln != "" && !strings.HasPrefix(ln, "data: ") {
+			t.Errorf("non-data line leaked: %q", ln)
+		}
+	}
+}

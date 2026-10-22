@@ -2,42 +2,115 @@
 
 [← 返回 README](../README.md)
 
-配置是单个 JSON 文件（默认 `config.json`，由 `-config` 指定）。**权威定义看
-[`config.example.json`](../config.example.json)** 与 `cmd/server/config.go` 的结构体注释，
-本文只列要点与本 fork 新增项。
+网关使用一个 JSON 配置文件，默认路径为运行目录下的 `config.json`，可以通过 `-config` 指定其他路径。
 
-## 关键配置段
+完整字段和默认值以 [`config.example.json`](../config.example.json) 为准。本文只说明常用配置分组和生效规则。
+
+## 最小配置
+
+```json
+{
+  "listen": "127.0.0.1:7863",
+  "api_key": "replace-with-a-random-key"
+}
+```
+
+`api_key` 留空表示网关不鉴权，只适合完全隔离的本机环境。
+
+## 基础配置
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `listen` | `:7863` | HTTP 监听地址，建议本机部署使用 `127.0.0.1:7863` |
+| `api_key` | 空 | 默认调用密钥，留空表示不鉴权 |
+| `keys_file` | `keys.json` | 多 key 文件，文件不存在或为空时回落到 `api_key` |
+| `auth_dir` | `auths` | 账号凭证目录 |
+| `state_file` | `data/state.json` | 账号池状态文件 |
+
+相对路径均从网关工作目录解析。生产环境中建议把工作目录固定为运行目录，不要指向源码目录。
+
+## 管理面板
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `admin.enabled` | `false` | 启用面板与 `/admin/*`、`/api/admin/*` 端点 |
+| `admin.token` | 空 | 管理面专用 token，为空时回落到首个调用 key，再回落到 `api_key` |
+
+开启管理面时 `api_key` 不能为空，否则网关会拒绝启动。
+
+## 提示词与请求兼容
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `prompt.mode` | `passthrough` | `passthrough`、`custom` 或 `append` |
+| `prompt.file` | 空 | 自定义提示词文件，空表示使用内置提示词 |
+| `features.sanitize_blacklist_fingerprints` | `true` | 清洗出站请求体中的指纹字段 |
+| `upstream.*` | 见示例 | 超时、客户端标识和设备 token |
+
+`custom` 会替换客户端的 system/developer 提示词。`append` 会在客户端提示词后追加网关提示词。只想保持原协议行为时使用 `passthrough`。
+
+## 账号池与冷却
 
 | 键 | 说明 |
-|---|---|
-| `listen` | 监听地址，默认 `:7863`；建议本机部署设为 `127.0.0.1:7863` |
-| `api_key` | 调用 key；**留空 = 不鉴权**，公网部署务必设置 |
-| `keys_file` | 多 key 文件路径，默认 `keys.json`；文件缺失 / 为空时回落 `api_key`（见 [管理后台与 CLI](admin.md)） |
-| `auth_dir` / `state_file` | 凭证目录与池状态落盘路径，默认 `./auths` / `./data/state.json`，相对工作目录解析 |
-| `admin.enabled` | 管理面开关（上游端点 + 面板 + CLI 动作），**默认 false**；开启时要求 `api_key` 非空（fail-fast） |
-| `admin.token` | 管理面专用 Bearer token，空 = 回落 `keys.json` 首个 key → `api_key` |
-| `prompt.mode` / `prompt.file` | 提示词模式 `passthrough`（缺省）/ `custom` / `append`，以及自定义提示词文件 |
-| `pool.*` | 在途上限、熔断阈值与退避、连败降权、闲置补偿、快过期积分窗口、成本探索间隔 |
-| `cooldown.*` | 429 软冷却基数与封顶 |
-| `session_sticky.*` | 会话粘性开关、TTL、GC 间隔 |
-| `schedule.*` | 六类定时任务的时点数组与独立开关（`checkin_hours` / `travel_hours` / … / `*_enabled`） |
-| `upstream.*` | 超时分层（`timeout_seconds` / `header_timeout_seconds` / `idle_timeout_seconds`）、客户端标识、设备 token |
-| `global.enabled` | 是否启用国际版域；`false` 可锁死纯 CN 部署 |
-| `features.sanitize_blacklist_fingerprints` | 出站请求体指纹脱敏开关 |
-| `upstash.url` / `upstash.token` | 可选的池状态 Redis 镜像 |
+| --- | --- |
+| `pool.max_in_flight` | 单账号最大在途请求数 |
+| `pool.max_in_flight_global` | 国际版域单账号的最大在途请求数 |
+| `pool.breaker_threshold` | 连续失败触发熔断的阈值 |
+| `pool.expiring_soon` | 快过期积分的优先窗口 |
+| `pool.cost_explore_interval` | 未知成本账号的探索间隔，设为 `"0"` 可关闭 |
+| `cooldown.*` | 429 软冷却的基数和上限 |
+| `session_sticky.*` | 会话粘性开关、TTL 和清理间隔 |
+
+修改这些配置会影响选号、冷却和并发行为。调整前先运行 `wbapi accounts` 和 `wbapi quota` 观察当前状态。
+
+## 定时任务
+
+`schedule.*` 控制六类任务的执行时点和开关：
+
+- `checkin_hours`：签到
+- `activity_hours`：活跃地图
+- `travel_hours`：猫猫旅行
+- `keepalive_hours`：token 保活
+- `school_hours`：开学季任务
+- `cat_hours`：夜猫子任务
+
+每类任务都有独立的 `*_enabled` 开关。手动执行使用 `wbapi task <任务>`。
+
+Android 模块的配置位于 `/data/adb/modules/wb2api/config.json`，安装时由
+`module/config.android.json` 生成；`auth_dir`、`keys_file`、`state_file` 必须
+留在模块目录内。`service.sh` 设置 `WB2A_SCHEDULER=0`，所以即使 `*_enabled`
+为 true 也不会自动运行，手动任务不受影响。
+
+## 双域与存储
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `global.enabled` | `true` | 是否允许国际版账号和 `global:` 模型路由 |
+| `upstash.url` | 空 | 可选的 Upstash Redis 地址 |
+| `upstash.token` | 空 | Upstash Redis token |
+
+Redis 用于镜像池状态和会话绑定。Redis 不可用时，网关仍可使用本地 `state.json` 运行。
 
 ## 环境变量
 
 | 变量 | 作用 |
-|---|---|
-| `WB2A_ADMIN_TOKEN` | 设置 `admin.token`，优先级高于配置文件 |
-| `WB2A_HOME` | `wbapi` CLI 的项目根目录（默认脚本所在目录） |
-| `WB2A_CONFIG` | `wbapi` CLI 的配置文件路径（默认 `$WB2A_HOME/config.json`） |
-| `WB2A_GATEWAY` | 直接指定网关地址，覆盖配置里的 `listen` |
-| `WB2A_PUBLIC_HOST` | 公网域名，仅用于 `wbapi` 的状态显示 |
+| --- | --- |
+| `WB2A_ADMIN_TOKEN` | 覆盖 `admin.token` |
+| `WB2A_HOME` | `wbapi` CLI 使用的运行根目录，默认可执行文件所在目录 |
+| `WB2A_CONFIG` | 覆盖 `wbapi` CLI 使用的配置文件路径 |
+| `WB2A_GATEWAY` | 覆盖网关地址，例如 `http://127.0.0.1:7863` |
+| `WB2A_PUBLIC_HOST` | 面板和状态输出中显示的公网域名 |
 
-## 注意
+## 生效规则
 
-- 改配置需要**重启服务**才生效（管理面板里的配置页是只读的，避免在浏览器里改坏关键参数）。
-- `admin.enabled=true` 且 `api_key` 为空时网关**启动即报错退出**，这是有意的：管理端点不能裸奔。
-- 升级上游后先看 `config.example.json` 的默认值变化（例如 `server.max_body_mb` 已被移除）。
+- 大部分配置需要重启网关后生效。
+- 新增或更新 `auths/` 凭证会自动加载，不需要重启。
+- 修改 `keys.json` 会自动热加载，不需要重启。
+- 管理面板中的设置页只读，不会在线修改配置文件。
+
+修改配置后运行：
+
+```bash
+./wbapi doctor
+./wbapi status
+```

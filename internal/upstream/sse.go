@@ -572,8 +572,12 @@ readLoop:
 			if werr != nil {
 				return werr
 			}
+		case strings.HasPrefix(strings.TrimSpace(trimmed), ":"):
+			// SSE 注释行（如上游 ": heartbeat" keep-alive）：按 SSE 规范无数据语义，
+			// 丢弃。此前原样透传会让客户端把注释文本当 JSON 解析，报
+			// `Unexpected token ':', ": heartbeat" is not valid JSON`。
 		case trimmed != "":
-			// 注释/其他行：原样透传
+			// 其他非 data 行（event:/id:/retry:）：原样透传。
 			if _, werr := io.WriteString(w, line); werr != nil {
 				return werr
 			}

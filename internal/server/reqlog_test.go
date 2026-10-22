@@ -54,7 +54,7 @@ func TestRequestLogCapacityWrap(t *testing.T) {
 
 // TestLogChatRowFeedsRing 校验请求出口的表格日志同时入环（后台的实时日志来源）。
 func TestLogChatRowFeedsRing(t *testing.T) {
-	logChatRow(1500*time.Millisecond, 4*time.Second, "deepseek-v4-flash", "stream", "abcdefghijkl", "小于", http.StatusOK, 120, 800)
+	logChatRowWithCredits(1500*time.Millisecond, 4*time.Second, "deepseek-v4-flash", "stream", "abcdefghijkl", "小于", http.StatusOK, 120, 800, 0.75, true, "x0.05 credits")
 	got := RecentRequests(1)
 	if len(got) != 1 {
 		t.Fatalf("应有 1 条记录，得到 %d", len(got))
@@ -75,6 +75,27 @@ func TestLogChatRowFeedsRing(t *testing.T) {
 	}
 	if rec.TokPS != 200 {
 		t.Errorf("速率 = %v, want 200", rec.TokPS)
+	}
+	if rec.Credit == nil || *rec.Credit != 0.75 {
+		t.Errorf("积分消耗 = %v, want 0.75", rec.Credit)
+	}
+	if rec.Credits != "x0.05 credits" {
+		t.Errorf("积分倍率 = %q, want x0.05 credits", rec.Credits)
+	}
+}
+
+// TestRequestLogCreditMissingOmitted 上游 usage 未带 credit 时，日志不得写成 0：
+// credit 字段整体省略（nil），倍率仍可独立记录。
+func TestRequestLogCreditMissingOmitted(t *testing.T) {
+	resetRequestLogForTest(t)
+	defer resetRequestLogForTest(t)
+	logChatRowWithCredits(0, time.Second, "m", "stream", "u", "", http.StatusOK, 100, 1, 0, false, "x0.05")
+	rec := RecentRequests(1)[0]
+	if rec.Credit != nil {
+		t.Errorf("credit = %v, want nil（usage 缺失≠0）", rec.Credit)
+	}
+	if rec.Credits != "x0.05" {
+		t.Errorf("credits = %q, want x0.05", rec.Credits)
 	}
 }
 

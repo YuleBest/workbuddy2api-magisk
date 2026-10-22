@@ -11,6 +11,9 @@ import (
 var hex32Re = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var hex16Re = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
+// uuidRe 官方 X-Conversation-ID 的带横线 UUID 形态（8-4-4-4-12）。
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 // TestChatHeadersConversationFullMeta 全量 meta 出站头族（issue #35 后台聚合）：
 // 聚合主键 X-Conversation-Request-ID 必发且等于传入值，消息级双头同值 32 hex，
 // X-Root-Request-ID = conversationRequestID，Trace 透传入站值，B3 链路族格式合法，
@@ -60,16 +63,18 @@ func TestChatHeadersConversationFullMeta(t *testing.T) {
 	}
 }
 
-// TestChatHeadersConversationNoConvID meta.ConversationID 为空 → 不发 X-Conversation-ID
-// （透传客户端原值优先，不伪造），其余头族照常。
+// TestChatHeadersConversationNoConvID meta.ConversationID 为空 → 仍必须发
+// X-Conversation-ID：由聚合键派生带横线 UUID；聚合键非 32 hex 时回落消息级 ID。
+// 2026-10-17 生产实测：缺失该头会让上游返回 400 code=11-128 "conversation id missing"。
 func TestChatHeadersConversationNoConvID(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	req := mustRequest(t)
 	c := &Client{}
 	c.ChatHeaders(req, a, "", ChatMeta{ConversationRequestID: "convreq-1"})
 
-	if got := req.Header.Get("X-Conversation-ID"); got != "" {
-		t.Errorf("X-Conversation-ID = %q want empty (client didn't send one)", got)
+	got := req.Header.Get("X-Conversation-ID")
+	if !uuidRe.MatchString(got) {
+		t.Errorf("X-Conversation-ID = %q want UUID form (必发，缺失触发 11-128)", got)
 	}
 	if got := req.Header.Get("X-Conversation-Request-ID"); got != "convreq-1" {
 		t.Errorf("X-Conversation-Request-ID = %q want convreq-1", got)
@@ -79,8 +84,9 @@ func TestChatHeadersConversationNoConvID(t *testing.T) {
 	}
 }
 
-// TestChatHeadersConversationEmptyMeta 零值 meta（如测试/直接调用方）也必发聚合主键：
-// conversationRequestID 内部补一个 NewMessageID（32 hex），B3 TraceId 取其值。
+// TestChatHeadersConversationEmptyMeta 零值 meta（如测试/直接调用方）也必发聚合主键
+// 与 X-Conversation-ID：conversationRequestID 内部补一个 NewMessageID（32 hex），
+// 会话 ID 由它渲染成带横线 UUID，B3 TraceId 取聚合键值。
 func TestChatHeadersConversationEmptyMeta(t *testing.T) {
 	a := &auth.Auth{AccessToken: "at", UID: "u1"}
 	req := mustRequest(t)
@@ -97,8 +103,8 @@ func TestChatHeadersConversationEmptyMeta(t *testing.T) {
 	if got := req.Header.Get("X-B3-TraceId"); got != convReqID {
 		t.Errorf("X-B3-TraceId = %q want %q", got, convReqID)
 	}
-	if got := req.Header.Get("X-Conversation-ID"); got != "" {
-		t.Errorf("X-Conversation-ID = %q want empty", got)
+	if got, want := req.Header.Get("X-Conversation-ID"), uuidFormatted(convReqID); got != want {
+		t.Errorf("X-Conversation-ID = %q want %q (由聚合键派生)", got, want)
 	}
 }
 

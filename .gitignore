@@ -1,8 +1,7 @@
 # Auth & secrets
-/auths/
-/data/
+auths/
+data/
 /cloudflared/
-/legacy/
 # 多 key 存储：keys.json 内含明文调用 key，绝不能进版本库（示例结构见 docs/admin.md）
 /keys.json
 *.key
@@ -12,31 +11,46 @@
 .env.*
 
 # Binaries (anchored to repo root only — bare "login"/"credit" would also ignore cmd/login/, cmd/credit/)
-# 每个 cmd/<name> 的本机构建产物都落在仓库根：Linux 版无扩展名（systemd ExecStart 指向 ./server），
+# 每个 cmd/<name> 的本机构建产物都落在仓库根：Linux 版无扩展名（systemd ExecStart 指向 ./wb2api），
 # Windows 版带 .exe。漏了任何一个都会让十几 MB 的二进制被 git add -A 直接提交进来。
 /login
+/login.sh
 /credit
+/credit.sh
 /wb2api
 /signin_bin
+/signin
+/signin.sh
 /server
 /acct
+/acct.sh
+/checkin
+/checkin.sh
+/dev
+/dev.sh
 /stats
 /activity
 /trial
-/bin
+/trial_bin
+/trial.sh
+/task_runner
+/school_open_day_2026
+/global_region
+/school_open_day_cron
+/school_open_day_cron.sh
+/dist
 # Windows 构建产物（server.exe / acct.exe / activity.exe / signin.exe / stats.exe / trial.exe …）
 /*.exe
 # go build 替换正在运行的 .exe 时会留一份 <名字>~ 备份，/*.exe 匹配不到它
 /*.exe~
 
 # Config with secrets (use config.example.json)
-/config.json
+config.json
 
 # Build artifacts
 /build/
 *.zip
 *.tmp
-__pycache__/
 
 # 运行时产物（API Key / 进程号 / 日志 / 工具草稿目录）
 # 为什么显式列 .apikey：它不是 config.json 的别名，而是 login.sh 等工具单独落盘的密钥文件，
@@ -46,10 +60,6 @@ __pycache__/
 *.pid
 *.log
 draft_*_folder/
-
-# Windows 计划任务入口：内容是本机绝对路径，只用于本机开机自启，不进版本库
-/gateway-task.cmd
-/tunnel-task.cmd
 
 # 前端依赖（管理面板源码在 web/，构建产物 internal/admin/dist 要进版本库）
 node_modules/
@@ -71,4 +81,3 @@ SPEC.md
 !CHANGELOG.md
 !internal/prompt/defaultprompt.md
 !docs/*.md
-/signin

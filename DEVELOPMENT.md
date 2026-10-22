@@ -1,241 +1,318 @@
 # 开发说明
 
-给仓库维护者与贡献者。部署与使用看 `README.md`。
+本文面向修改代码、构建发布包和维护仓库的开发者。安装与使用请看 [`README.md`](README.md) 和 [`docs/android-module.md`](docs/android-module.md)。
 
-## Android 模块
+## 项目边界
 
-本仓库的 Android 交付物是 KernelSU 模块。模块源码在 `module/`，构建脚本
-在 `scripts/build_android.sh`，产物写入 `build/`。
-
-```bash
-make build
-make test
-```
-
-Android 构建使用 NDK r27c 和目标 API 23：
-
-```text
-GOOS=android
-GOARCH=arm64
-CGO_ENABLED=1
--tags netcgo
-```
-
-必须使用 cgo resolver。Android 没有常规 `/etc/resolv.conf`，
-`CGO_ENABLED=0` 的纯 Go DNS 会不可靠。Android 下 Go 默认使用 UTC，
-因此服务端和 CLI 都调用 `internal/timezone.Init()` 固定为
-`Asia/Shanghai`。
-
-Android 运行时文件全部位于 `/data/adb/modules/wb2api`。CLI 通过
-自身路径推导模块根目录，并拒绝配置中指向模块目录外的 `auth_dir`、
-`keys_file` 和 `state_file`。
-
-`cmd/wbapi` 是 Android 管理 CLI，不依赖 Python。进程启动使用
-`Setsid`，PID 文件位于 `run/wbapi.pid`，日志位于
-`logs/gateway.log`。`service.sh` 只负责调用 `wbapi start --quiet`
-并立即返回。
-
-自动调度通过 `WB2A_SCHEDULER=0` 关闭。`school` 和 `cat` 的 Python
-入口通过 `WB2A_PYTHON_TASKS=0` 拒绝。
-
-## 分支与上游
-
-本仓库是 [`Sliverkiss/workbuddy2api`](https://github.com/Sliverkiss/workbuddy2api) 的 fork，
-`master` 承载本 fork 的全部改动（内置管理后台、多 key、`wbapi` CLI、Windows 部署适配等）。
-上游同步用 rebase，保持本地提交线性：
-
-```bash
-git remote add upstream https://github.com/Sliverkiss/workbuddy2api.git   # 只需一次
-git fetch upstream && git rebase upstream/master
-```
-
-本 fork 的改动都是**增量**的：不改上游配置键语义、不删上游端点，所以可以直接替换上游二进制。
+- 服务端、CLI、登录、任务和发布工具全部使用 Go。
+- `web/` 使用 Vue 3、TypeScript 和 Vite，只允许在管理面板构建链路中使用。
+- 运行时不能依赖 Python、Shell、Batch 或 Node。
+- 仓库根 `install.sh` 是唯一的 Shell 引导器，只负责下载、校验和解压 Release 包。
+- 本 fork 额外提供 KernelSU 模块：`module/` 生命周期脚本与 `scripts/` 构建脚本是仅有的 Shell 源码，白名单在 `internal/reposource/source_policy_test.go`。
+- 项目不提供 Docker 支持，除非后续明确重新引入。
+- 修改核心行为时必须保留 OpenAI 兼容接口和现有配置键语义。
 
 ## 目录结构
 
-```
-cmd/server          网关主程序（配置加载、pool/scheduler 组装、HTTP 服务）
-cmd/wbapi           Android/KernelSU 管理 CLI
-cmd/login           设备授权登录 CLI
-cmd/signin          单次签到 CLI
-cmd/credit          积分查询 CLI
-cmd/activity        活跃上报一次性触发器
-cmd/trial           国际版注册 / trial 加油包 CLI
-cmd/acct            账号停用 / 恢复 / 复活 CLI（走网关管理端点）
-cmd/stats           统计 CLI
-internal/admin      管理后台：观测 API + 运维动作 + 内嵌 SPA（dist 由 web/ 构建产出）
-internal/server     数据面：OpenAI 兼容 handler、鉴权、多 key 存储、请求日志
-internal/auth       凭证解析与原子写回
-internal/config     跨命令共享的配置段（schedule）与默认值
-internal/pool       账号池：选号 / 冷却 / 熔断 / 在途租约 / 状态持久化
-internal/scheduler  定时任务：签到 / 活跃上报 / 猫猫旅行 / 保活 / 开学季 / 夜猫子
-internal/session    会话粘性路由
-internal/upstream   上游客户端：SSE 流、请求体改写管线（含 ZCode 归一化）、错误分类
-internal/prompt     内置提示词
-internal/logfmt     日志行格式化
-internal/redisstore 池状态 Redis 镜像
+```text
+cmd/server          网关入口
+cmd/wbapi           桌面 / 服务器运维 CLI（internal/wbapicli 的入口）
+cmd/wbapi-android   Android 模块管理 CLI（模块内产物名为 bin/wbapi）
+cmd/login           OAuth 设备授权登录
+cmd/build           全量构建和兼容命令生成
+cmd/signin          签到
+cmd/credit          积分查询
+cmd/acct            账号停用、恢复和复活
+cmd/activity        活跃上报
+cmd/trial           国际版注册和 trial
+cmd/stats           终端统计工具
+cmd/school          开学季任务
+cmd/taskrunner      通用任务执行器
+cmd/taskcron        任务 cron 入口
+cmd/region          国际版地区设置
+internal/admin      管理接口、动作和嵌入式 SPA
+internal/auth       凭证解析和原子写回
+internal/config     共享配置结构
+internal/loginflow  登录流程
+internal/pool       账号池、选号、冷却和状态
+internal/redisstore Redis 状态镜像
+internal/scheduler  定时任务调度
+internal/server     OpenAI 兼容数据面和管理 API
+internal/session    会话粘性
+internal/tasks      任务执行和活动协议（原 Python 任务已迁入）
 internal/timezone   Android 时区初始化
-web                 Vue 3 + Vite + TS 管理面板源码
+internal/upstream   上游请求、SSE 和改写管线
+internal/wbapicli   桌面 CLI 实现和帮助系统
 module              KernelSU 模块脚本、配置模板与元数据
-wbapi               运维 CLI（Python 3，仓库根）
+scripts             Android 构建与安装迁移测试脚本
+web                 Vue 3 管理面板源码
 ```
 
 ## 环境要求
 
-- Go ≥ 1.22（`go.mod` 声明 1.22.5）
-- Node ≥ 20 + pnpm ≥ 9（只改后端时不需要）
-- Python 3（跑 `wbapi` 时才需要）
-- 一个已注册的 CodeBuddy 账号（跑真实请求时才需要）
+- Go 1.22+，`go.mod` 当前声明 `1.22.5`
+- Node 20+ 和 pnpm 9+，仅修改前端时需要
+- 构建 Android 模块：NDK r27c、`zip`、`shellcheck`、`shfmt`
+- 一个已授权账号，仅在真实联调时需要
 
 ## 常用命令
 
+### 后端
+
 ```bash
-# 后端
-go build ./...
+go test ./...
 go vet ./...
-go test ./...            # 完整测试套件
-go test -race ./internal/admin/ ./internal/pool/ ./internal/server/
+go run ./cmd/server -config config.json
+go run ./cmd/build
+```
 
-# 前端（web/ 目录）
+`go run ./cmd/build` 将服务端、CLI、登录、任务和兼容命令构建到 `dist/`。
+
+### Android 模块
+
+```bash
+make build   # 交叉编译并打包到 build/stage 与 build/wb2api-<version>-arm64-v8a.zip
+make test    # Go 测试、脚本 lint、安装迁移测试和模块校验
+```
+
+### 前端
+
+```bash
+cd web
 pnpm install
-pnpm dev                 # Vite 开发服务器，/api/admin 代理到 127.0.0.1:7863
-pnpm build               # 类型检查 + 构建，产物落 internal/admin/dist（被 go:embed 拾取）
-pnpm build:only          # 跳过类型检查的快速构建
+pnpm dev
+pnpm build
+pnpm build:only
 ```
 
-## 管理后台的构建链路
+- `pnpm dev` 启动 Vite 开发服务器，并把管理 API 代理到 `127.0.0.1:7863`。
+- `pnpm build` 执行 TypeScript 检查并写入 `internal/admin/dist`。
+- `pnpm build:only` 跳过类型检查，只适合快速本地预览。
 
+## Android 模块
+
+构建入口是 `scripts/build_android.sh`，使用 NDK clang、`CGO_ENABLED=1`、
+`-tags netcgo` 和目标 API 23：
+
+```text
+GOOS=android GOARCH=arm64 CGO_ENABLED=1 -tags netcgo
 ```
-web/src/*.vue ──vite build──▶ internal/admin/dist/ ──go:embed──▶ 二进制
+
+必须使用 cgo resolver：Android 没有常规 `/etc/resolv.conf`，纯 Go DNS 不可靠。
+Android 下 Go 默认使用 UTC，因此 `cmd/server` 与 `cmd/wbapi-android` 都调用
+`internal/timezone.Init()` 固定为 `Asia/Shanghai`。
+
+运行时文件全部位于 `/data/adb/modules/wb2api`：
+
+| 路径 | 内容 |
+| --- | --- |
+| `config.json` | 安装时由 `module/config.android.json` 生成，内含随机 `api_key` |
+| `keys.json` | 多 key 存储 |
+| `auths/` | 账号凭证 |
+| `data/` | `state.json`、`requests.json`、`metrics.json` |
+| `logs/gateway.log` | 网关日志，超过 4MB 轮转 |
+| `run/wbapi.pid` | 网关 PID |
+
+`cmd/wbapi-android/paths.go` 从自身路径推导模块根目录，并拒绝配置中指向模块
+目录外的 `auth_dir`、`keys_file` 和 `state_file`。服务启动使用 `Setsid`，
+`module/service.sh` 只调用 `wbapi start --quiet` 后立即返回。
+
+`module/service.sh` 设置 `WB2A_SCHEDULER=0` 关闭自动调度；手动任务仍可从
+面板或 `wbapi task` 触发。任务实现全部在 `internal/tasks`，不再有 Python
+依赖，`school` 与 `cat` 与其他任务一样按需执行。
+
+Android CLI 与桌面版 `cmd/wbapi` 的命令面基本一致，差异是：不管理
+cloudflared 隧道，`start|stop|restart` 使用模块 PID 文件而不是 systemd。
+新增命令时优先只改 `cmd/wbapi-android`，不要把 Android 专用逻辑塞进
+`internal/wbapicli`。
+
+## 前端构建链路
+
+```text
+web/src --pnpm build--> internal/admin/dist --go:embed--> Go binary
 ```
 
-- `internal/admin/dist` 是构建产物，**提交进版本库**：这样只改后端的人（以及 Dockerfile 的
-  `go build`）不需要 Node 就能编译。**前端产物和后端代码必须一起提交**，否则二进制里是旧页面。
-- 改完前端必须重新 `pnpm build` 再 `go build`。
-- `internal/admin/webui.go` 负责静态资源与 SPA 回退：命中文件按扩展名给 Content-Type，
-  `assets/` 下（内容哈希文件名）长缓存，其余 `no-cache`，未知路径回退 `index.html` 交给前端路由。
-- 前端路由是 history 模式，base 固定 `/admin/`；Go 侧的路由前缀与 `vite.config.ts` 的 `base`
-  必须一致，换前缀要同时改。
-- 前端路由表在 `web/src/router.ts`，未登录只有 `/login` 可达，鉴权状态来自 `GET /api/admin/session`。
+约定：
 
-## 两套管理入口的关系
+- `internal/admin/dist` 是嵌入二进制的构建产物，需要提交。
+- 修改 `web/` 后必须重新执行 `pnpm build`，再把前后端改动一起提交。
+- 管理面板路由固定为 `/admin/`，Go 前缀和 `vite.config.ts` 的 `base` 必须一致。
+- 未登录只允许访问 `/admin/login`，鉴权状态来自 `GET /api/admin/session`。
+- 静态资源哈希文件使用长缓存，其他文件使用 `no-cache`。
 
-网关有两组管理端点，语义同源、客户端不同，**不要各写一套状态机**：
+## 管理入口
+
+网关有两组管理入口，但底层状态必须复用同一批方法。
 
 | 入口 | 路径 | 客户端 |
-|---|---|---|
-| 上游运维端点 | `POST /admin/accounts/{uid}/{disable,enable,revive}` | `acct.sh` / `cmd/acct` / `wbapi acct` |
-| Web 后台 API | `GET/POST /api/admin/*` | 浏览器面板（`web/`） |
+| --- | --- | --- |
+| 兼容管理端点 | `/admin/accounts/{uid}/{disable,enable,revive}` | `acct`、`wbapi acct` |
+| 管理 API | `/api/admin/*` | Web 面板、`wbapi` |
 
-- 两边都走 `pool` 的同一批方法：`SetManualDisabled`（手动停用位）/ `ReviveDisabled`（系统自动禁用位）/
-  `ManualDisabledState`（读双位）/ `ClearCooldown`（清软冷却与降权，不动熔断与积分）。
-  **手动停用与系统自动禁用是两个独立状态位**：`enable` 只解手动位，
-  仍被系统禁用的号需要 `revive` 才回选号池。
-- 上游端点的模式表在 `internal/server/handler.go` 的 `adminRoutes`，经 `server.AdminRoutePatterns()`
-  暴露给 `cmd/server`：后台前端挂在 `/admin/` 前缀下，必须先把这些模式转回数据面，
-  否则会被 SPA 吃掉（`acct.sh` 会 404）。**上游新增管理端点时同步这张表即可，不用改 main.go。**
-- 开关是同一个 `config.admin.enabled`（默认 false），且要求 `api_key` 非空（fail-fast）。
+账号状态约定：
 
-## 管理 API 约定
+- `manual_disabled` 表示人工停用。
+- `disabled` 表示系统自动禁用。
+- `enable` 只清除手动停用。
+- `revive` 只清除系统禁用。
+- 两个状态都为空时，账号才回到选号池。
 
-- 全部挂在 `/api/admin/*`，Bearer token 鉴权（常量时间比较）。token 取 `admin.token` →
-  `keys.json` 首个 key → `api_key`；三者都空时不鉴权。
-- 响应一律 JSON；错误形如 `{"error":{"code":"...","message":"..."}}`。
-- 只读接口：`session` / `overview` / `accounts` / `keys`(GET) / `logs` / `models` / `config`。
-- 动作接口：账号 `disable|enable|revive|clear-cooldown`、密钥 `POST` / `DELETE`、
-  `tasks/{checkin|activity|travel|keepalive|school|cat}`。
-- `tasks/*` 默认异步（202，结果写服务日志）；`tasks/checkin?wait=1` 同步等待并回传逐号回执
-  （签到是秒级短任务，公网隧道等得起，上限 80s；旅行/活跃上报按账号限速，同步会撑到分钟级，故不支持 wait）。
-- `POST /api/admin/v1/chat/completions` 是面板「模型对话」的入口，走 OpenAI 兼容面而非 REST
-  （`/api/admin/models` 返回 `{models:[...]}`，混用会让 SDK 误判）。它把请求体的 `Authorization`
-  换成 `keys.First()`、透传客户端 IP 头，再把**原始 ResponseWriter** 交给数据面 handler——SSE 直写浏览器，
-  选号 / 粘性 / 冷却 / reqlog / 统计零复制照走，没有可信旁路。请求体上限 4MB，`Chat == nil` 时 503。
-- 动作接口只调用 `pool` / `scheduler` / `server.KeyStore` 的既有入口，不直接改内部状态；
-  新增动作时优先复用这些入口，别在 admin 包里另写一套状态机。
-- 脱敏：`config` 接口不回传任何密钥明文（只给 `*_set` 布尔）；`accounts` 里 uid 全量返回给管理端
-  （运维需要区分账号），但**日志**里只打前 8 位。
+新增管理动作时：
 
-## 多 key 存储（internal/server/keystore.go）
+1. 优先复用 `pool`、`scheduler` 或 `server.KeyStore` 的现有方法。
+2. 同步检查 `/api/admin/*` 和兼容 `/admin/*` 是否需要暴露。
+3. 添加无 token、成功、未知目标和失败路径测试。
 
-- 文件格式：`{"keys":[{"key","note","added"}]}`（`note` 为首选备注字段，兼容旧的 `comment`）。
-- 路径取 `config.keys_file`（默认 `keys.json`，相对工作目录）；文件不存在或为空时回落 `config.api_key`，
-  两者都空 = 不鉴权。
-- **热重载**：每次 `Valid` / `AuthRequired` / `Count` / `First` / `List` 都按 mtime 判断是否重读，
-  所以增删 key 不需要重启；解析失败保留上一份可用 key（不把自己锁在门外）。
-- `Valid` 对所有 key 做常量时间比较且不提前返回；`Add` 生成 `sk-<32 hex>` 并以 tmp+rename 原子写入（0600）；
-  `Remove` 要求前缀唯一匹配；`List` 只返回掩码 + 前缀 + 备注。
-- 面板「调用密钥」页与 `wbapi key` 都直接操作这个文件，不经过内存状态。
+## 管理 API
 
-## 上游请求体归一化（internal/upstream/zcode.go）
+- 所有接口位于 `/api/admin/*`。
+- 鉴权 token 优先级为 `admin.token`、`keys.json` 首个 key、`api_key`。
+- 响应统一使用 JSON。
+- 错误格式为 `{"error":{"code":"...","message":"..."}}`。
+- `config` 接口必须脱敏。
+- 管理 pprof 或其他调试端点如果存在，必须沿用同一鉴权边界。
 
-`payload.go` 的 `PrepareBodyOptWithEffortsAndDefault` 在强制 `stream:true` 之后、指纹脱敏之前调用
-`normalizeZCodeFormat`，把 AI-SDK v5 / ZCode 形态折成标准 OpenAI：
+面板模型对话入口为 `POST /api/admin/v1/chat/completions`。它必须继续走数据面 handler，不能旁路选号、粘性、冷却、日志和统计。
 
-- 内容块数组（`text` / `reasoning` / `thinking` / `tool-call` / `tool-result` / `image` / `file`）
-  → 标准 messages（tool-result 拆成 `role:"tool"` + `tool_call_id`，图片转 `image_url` 部件）；
-- 字典形态的 `tools` → `{"type":"function","function":{...}}` 数组；
-- `maxOutputTokens` / `max_output_tokens` → `max_tokens`（不碰 `max_completion_tokens`）；
-- **孤儿 tool 消息降级**：没有配对 `tool_call_id` 的 `tool` 消息改成 `user`，避免上游报 11148。
+## 调用密钥
 
-标准 OpenAI 请求原样通过（有测试锁定）。改这块时同步更新 `zcode_test.go` 与 `payload_test.go`。
+文件格式：
 
-## 请求日志环形缓冲（internal/server/reqlog.go）
+```json
+{
+  "keys": [
+    {
+      "key": "sk-...",
+      "note": "备注",
+      "added": "2026-10-20"
+    }
+  ]
+}
+```
 
-环形窗口容量 500，供面板「请求日志」页读，并原子持久化到 `state.json` 同目录的
-`requests.json`，服务重启后恢复。`logChatRow` 在 `chatLogEnabled` 早退**之前**就写入缓冲，
-所以即使关掉 stdout 的表格日志，面板仍有记录；uid 只存前 8 位，页面账号列只展示昵称。
+实现位于 `internal/server/keystore.go`：
 
-## 请求统计持久化（internal/server/metrics.go）
+- 路径取 `keys_file`，默认 `keys.json`。
+- 文件变化按 mtime 热加载。
+- 文件缺失或为空时回落 `api_key`。
+- 解析失败时保留上一份可用 key。
+- 写入使用临时文件加原子替换，权限为 `0600`。
 
-`/v1/stats` 的原始累加器原子写入 `state.json` 同目录的 `metrics.json`，普通重启后恢复。
-总览卡片的“清零”调用 `ResetTokenStats`，只清输入/输出、缓存 Token 和模型 Token 排行，
-保留请求数、失败数、延迟与 credit；清零结果立即落盘，重启不会恢复旧 Token。
+## 请求改写
 
-## Windows 部署
+`internal/upstream` 统一处理下游请求到上游协议的转换：
 
-本 fork 的目标部署形态之一是 Windows 计划任务（另一套是 Docker / systemd）：
+- 强制上游使用流式请求，非流式响应由网关本地聚合。
+- 兼容 AI-SDK、ZCode 和其他 OpenAI 兼容客户端的字段差异。
+- 归一内容块、工具定义、`tool_choice`、图片和推理字段。
+- 处理孤立 tool 消息，避免上游 11148。
+- 注入 DeepSeek thinking 和 reasoning 字段。
+- 可选清洗请求体指纹。
 
-- 二进制为仓库根的 `server.exe`，由计划任务 `wbapi-gateway` 拉起；隧道是 `wbapi-tunnel` + `cloudflared.exe`。
-- `gateway-task.cmd` / `tunnel-task.cmd` 是这两个任务的入口脚本，内容含**本机绝对路径**，已被
-  `.gitignore` 排除，不进版本库（换机器要自己写一份）。
-- `wbapi` 通过 `os.name == "nt"` 判断平台：服务命令改走 `schtasks` / `taskkill`，探活改成
-  `/healthz` + `tasklist`，日志改读 `gateway.log` / `gateway.err.log`，`doctor` 跳过 uid 属主检查。
-- Windows 上 `python3` 常被 Microsoft Store 的应用执行别名占用（执行无任何输出），
-  跑 `wbapi` 用 `uv run --no-project python wbapi ...` 或指向真实解释器。
+修改这段逻辑时，必须补充表驱动测试，并覆盖标准 OpenAI 请求的零回归行为。
+
+## 持久化
+
+默认数据目录为 `./data`（Android 模块为 `/data/adb/modules/wb2api/data`）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `state.json` | 账号池状态、冷却、积分和成本账本 |
+| `requests.json` | 最近 500 条请求日志 |
+| `metrics.json` | Token、延迟和模型统计 |
+
+这些文件均使用临时文件加原子替换。测试持久化逻辑时同时覆盖写入失败、恢复和损坏文件回退。
+
+## CLI 帮助
+
+桌面 CLI 的帮助唯一来源是 `internal/wbapicli/help.go`。新增或修改命令时：
+
+1. 更新命令帮助和子命令帮助。
+2. 支持 `wbapi help <命令>` 和 `wbapi <命令> --help`。
+3. 参数错误返回 `2`，并提示具体帮助命令。
+4. 更新 `internal/wbapicli/help_test.go`。
+5. 同步检查 [`docs/admin.md`](docs/admin.md) 的命令表。
+
+Android CLI 的帮助文本在 `cmd/wbapi-android/main.go`，修改命令后同步更新
+[`docs/android-module.md`](docs/android-module.md)。
+
+## 上游同步
+
+本 fork 与上游历史互相独立（fork 首个提交是整树导入），不能直接
+`git rebase` 或 `git merge`。同步方式是以 `upstream/master` 为基线重建工作树，
+再重放 fork 增量：
+
+```bash
+git fetch upstream                    # upstream = YuleBest/workbuddy2api
+git worktree add /tmp/wb-sync HEAD
+cd /tmp/wb-sync
+git checkout -B sync-work HEAD
+git read-tree -u --reset upstream/master
+# 恢复 fork 专有文件（module/、scripts/、cmd/wbapi-android 等），
+# 再合并共享文件的 Android 适配（见下）
+```
+
+需要重放的 fork 适配点：
+
+- `cmd/server/main.go`：`internal/timezone.Init()`、`WB2A_SCHEDULER=0` 网关开关、管理后台地址日志。
+- `internal/server/handler.go`：`WB2A_DUMP_REQ` 落盘到 `os.TempDir()`。
+- `internal/reposource/source_policy_test.go`：模块与构建脚本的 Shell 白名单。
+- `cmd/wbapi-android/`、`module/`、`scripts/`、`docs/android-module.md`、`.github/workflows/build-android.yml`、`Makefile`、`CHANGELOG.md`。
+- `README.md`、`DEVELOPMENT.md`、`docs/` 的 Android 说明。
+
+同步后至少跑 `make test`、`cd web && pnpm build`，并在真机验证安装、重启、
+Action 按钮、CLI、管理后台、OpenAI 请求和升级迁移。
+
+## 发布
+
+打 `v*` 标签会触发 `.github/workflows/build-android.yml`：交叉编译模块、
+校验 ZIP 并发布 Release；`CHANGELOG.md` 顶部小节作为发布说明，标签必须与
+`module/module.prop` 的 `version` 完全一致。上游的 `ci.yml` 负责 Go 测试，
+`release.yml` 负责桌面平台发布包。
 
 ## 测试
 
-- 后端：`go test ./...`。新增管理接口时在 `internal/admin/admin_test.go` 里加一条 httptest 用例，
-  覆盖「无 token 401 / 动作生效 / 未知目标 404」三类断言；面板对话的代理行为在 `internal/admin/chat_test.go`。
-- 密钥读写测试在 `internal/server/keystore_test.go`（新增/掩码/前缀吊销/坏文件不覆盖/热重载）。
-- 请求日志环形缓冲的测试在 `internal/server/reqlog_test.go`（顺序、容量回绕、重启恢复、脱敏）。
-- 请求体归一化测试在 `internal/upstream/zcode_test.go`。
-- 前端：`pnpm build` 内含 `vue-tsc --noEmit` 类型检查；改完 UI 用 `pnpm dev` 或构建后进
-  `/admin/` 实际点一遍（尤其动作按钮与空/错状态）。
-
-## 提交前自检
+最低要求：
 
 ```bash
-gofmt -l $(git ls-files '*.go')   # 见下方说明：只看你改动的文件
-go vet ./...
 go test ./...
-cd web && pnpm build              # 含类型检查
+go vet ./...
 ```
 
-> 仓库里有相当一部分**历史遗留**的 gofmt 偏差文件（上游带来，40+ 个，多是结构体字段对齐）。
-> 只格式化你改动的文件，别整仓重排制造无意义的 diff。
+按风险补充测试：
+
+- 账号池和并发行为：`go test -race ./internal/pool/ ./internal/server/ ./internal/session/`
+- 管理接口：`internal/admin/*_test.go`
+- 密钥热加载和权限：`internal/server/keystore_test.go`
+- 请求日志和统计：`internal/server/reqlog_test.go`、`metrics_test.go`
+- 请求体归一化：`internal/upstream/*_test.go`
+- 任务系统：`internal/tasks/*_test.go`
+- CLI 帮助：`internal/wbapicli/help_test.go`
+- Android 安装迁移：`scripts/test_customize.sh`
+
+## 提交前检查
+
+```bash
+gofmt -l $(git ls-files '*.go')   # 只格式化本次修改的文件
+go vet ./...
+go test ./...
+cd web && pnpm build
+make build
+```
+
+仓库仍有部分历史 gofmt 偏差文件。只格式化本次修改的 Go 文件，不要制造全仓库格式 diff。
 
 ## 文档约定
 
-| 文档 | 定位 | 长度约束 |
-|---|---|---|
-| `README.md` | 门面：是什么、怎么跑起来、文档索引 | **≤ 1500 字**（硬约束，宁短勿长） |
-| `docs/*.md` | 详细内容：能力、部署、管理面、配置、合规 | 单篇 ≤ 1000 行 |
-| `DEVELOPMENT.md` | 维护者：目录结构、构建链路、内部约定、测试 | — |
+| 文档 | 定位 |
+| --- | --- |
+| `README.md` | 项目简介、快速开始和文档导航，限制在 1500 字符内 |
+| `docs/android-module.md` | Android 安装、目录、CLI 与构建 |
+| `docs/deploy.md` | 桌面和服务器的安装、服务与源码构建 |
+| `docs/config.md` | 配置键和生效规则 |
+| `docs/admin.md` | 管理面板、密钥和 CLI |
+| `docs/features.md` | 核心能力和架构 |
+| `docs/compliance.md` | 安全边界、免责声明和许可 |
+| `DEVELOPMENT.md` | 开发、测试、内部契约和发布流程 |
 
-- README 只放「一眼看完」的信息，细节一律下沉到 `docs/`，两边靠文档索引互相链接；
-  往 README 加内容前先想清楚它是不是该进 `docs/`。
-- 改完 README 量一下：`wc -m README.md` 应 < 1500。
-- `.gitignore` 用 `*.md` 排除 Markdown，白名单放行 `README.md`、`DEVELOPMENT.md` 与 `docs/*.md`；
-  新增其它需要进版本库的文档，要加一条 `!路径.md`。
-- 本机运维笔记 `NOTES.md` 属于个人环境信息（主机名、路径、域名），保持 gitignore 状态，不进版本库。
+文档应优先使用短段落、小标题、表格和可复制命令。不要加入本机私有路径、域名、token 或运维笔记。

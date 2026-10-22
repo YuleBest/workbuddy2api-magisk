@@ -38,7 +38,7 @@ type Auth struct {
 	FilePath       string // 来源文件；refresh 后原子写回此处
 
 	// DeviceToken 设备风控 Token（X-Device-Token 头），来源 auth 文件的 device_token 键。
-	// 缺省为空 = 不注入该头（容器内无桌面端 Turing SDK 的常见部署）。
+	// 缺省为空 = 不注入该头（无桌面端 Turing SDK 的常见部署）。
 	// 手写扁平形 auth 文件可直接写 "device_token": "..."；插件 OAuth 嵌套形
 	// 顶层 device_token 也会被解析（与桌面端共用状态文件的部署方式）。
 	DeviceToken string

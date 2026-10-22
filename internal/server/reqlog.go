@@ -29,6 +29,8 @@ type RequestRecord struct {
 	PromptTokens     int       `json:"prompt_tokens"`     // -1 = usage 缺失
 	CompletionTokens int       `json:"completion_tokens"` // -1 = usage 缺失
 	Tokens           int       `json:"tokens"`            // completion token 的兼容别名；-1 = usage 缺失
+	Credit           *float64  `json:"credit,omitempty"`  // 本次实际积分消耗；nil = usage 缺失
+	Credits          string    `json:"credits,omitempty"` // 模型积分倍率原文；空 = 目录未收录/缓存冷
 	TotalMS          int64     `json:"total_ms"`
 	TokPS            float64   `json:"tok_per_sec"` // 0 = 无法折算
 }

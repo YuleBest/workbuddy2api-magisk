@@ -2,156 +2,287 @@
 
 [← 返回 README](../README.md)
 
-## 环境要求
+## 选择安装方式
 
-- **Docker + Docker Compose**（推荐部署方式，镜像内已含 `app` 低权限用户与全部工具脚本），
-  或 **Windows 10/11 + 计划任务**（本 fork 的部署形态）
-- 一个或多个已注册的 CodeBuddy 账号，用于 OAuth 登录
-- 宿主机 Go ≥ 1.22（仅源码构建时需要）、Node ≥ 20 + pnpm ≥ 9（仅改前端时需要）
-- `wbapi` CLI 需要 Python 3
+推荐使用 GitHub Release 预构建包，不需要安装 Go。只有修改源码或参与开发时才需要本地构建。
 
-## Docker Compose 一键部署
+| 方式 | 适用场景 | 额外要求 |
+| --- | --- | --- |
+| Release 预构建包 | 直接部署 | 无 |
+| 源码构建 | 修改代码或自行编译 | Go 1.22+ |
+| 前端开发 | 修改管理面板 | Node 20+、pnpm 9+ |
+| KernelSU 模块 | Android 手机 | KernelSU、arm64-v8a |
+
+本项目不提供 Docker 镜像。Android 手机不使用这里的预构建包，安装、目录与 CLI
+见 [Android 模块](android-module.md)。
+
+## Linux 一键安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YuleBest/workbuddy2api/master/install.sh | bash
+```
+
+安装器会完成以下操作：
+
+1. 检测 Linux `amd64` 或 `arm64`。
+2. 下载 `v1.0.1` Release 压缩包和 `SHA256SUMS`。
+3. 校验 SHA-256。
+4. 安装到 `~/.local/share/wb2api`。
+5. 创建 `wb2api`、`wbapi` 和 `wb2api-login` 命令入口。
+6. 首次安装时生成随机 `api_key`，启用管理面板并打印地址。
+
+默认不会启动网关，也不会创建 systemd 服务、计划任务或 cloudflared 配置。
+
+可以提前下载脚本检查：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/YuleBest/workbuddy2api/master/install.sh
+less install.sh
+bash install.sh
+```
+
+可选环境变量：
+
+| 变量 | 作用 |
+| --- | --- |
+| `WB2API_VERSION` | 安装指定版本，默认 `v1.0.1` |
+| `WB2API_HOME` | 修改运行目录 |
+| `WB2API_BIN_DIR` | 修改命令链接目录，默认 `~/.local/bin` |
+
+## 下载 Release
+
+每个 Release 提供以下运行包：
+
+| 平台 | 架构 | 文件 |
+| --- | --- | --- |
+| Linux | `amd64` | `workbuddy2api-<tag>-linux-amd64.tar.gz` |
+| Linux | `arm64` | `workbuddy2api-<tag>-linux-arm64.tar.gz` |
+| macOS | `amd64` | `workbuddy2api-<tag>-darwin-amd64.tar.gz` |
+| macOS | `arm64` | `workbuddy2api-<tag>-darwin-arm64.tar.gz` |
+| Windows | `amd64` | `workbuddy2api-<tag>-windows-amd64.zip` |
+| Windows | `arm64` | `workbuddy2api-<tag>-windows-arm64.zip` |
+
+Release 同时包含 `SHA256SUMS`。压缩包内包含完整运行命令、`config.example.json`、README 和 LICENSE。
+
+Android 模块的发布包由本 fork 的 Release 提供：`wb2api-<version>-arm64-v8a.zip`
+及同名 `.sha256`，刷入 KernelSU 即可，步骤见 [Android 模块](android-module.md)。
+
+Linux 或 macOS 校验单个下载文件：
+
+```bash
+grep 'linux-amd64' SHA256SUMS | sha256sum -c -
+# macOS 使用：
+grep 'darwin-arm64' SHA256SUMS | shasum -a 256 -c -
+```
+
+Windows PowerShell 校验：
+
+```powershell
+Get-FileHash .\workbuddy2api-<tag>-windows-amd64.zip -Algorithm SHA256
+```
+
+## Linux systemd 部署
+
+下面以 `/home/your-user/wb2api` 为运行目录。不要把配置、凭证和日志放在 Git 源码目录。
+
+```bash
+mkdir -p /home/your-user/wb2api
+tar -xzf workbuddy2api-<tag>-linux-amd64.tar.gz -C /home/your-user/wb2api
+cd /home/your-user/wb2api
+cp config.example.json config.json
+```
+
+编辑 `config.json`。至少设置：
+
+```json
+{
+  "listen": "127.0.0.1:7863",
+  "api_key": "replace-with-a-random-key"
+}
+```
+
+添加账号：
+
+```bash
+./login
+# 国际版账号：
+./login --realm=global
+```
+
+登录完成后，凭证写入 `auths/`，运行中的网关会自动加载，不需要重启。
+
+创建 `/etc/systemd/system/wbapi-gateway.service`：
+
+```ini
+[Unit]
+Description=WorkBuddy2API Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=your-user
+WorkingDirectory=/home/your-user/wb2api
+ExecStart=/home/your-user/wb2api/wb2api -config /home/your-user/wb2api/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用并检查：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wbapi-gateway
+cd /home/your-user/wb2api
+./wbapi doctor
+curl -s http://127.0.0.1:7863/healthz
+```
+
+如果使用 Cloudflare Tunnel，请单独创建 `wbapi-tunnel.service`。`wbapi tunnel` 默认操作该服务名。
+
+## macOS 运行
+
+解压对应 `darwin` 包，例如到 `/Users/your-user/wb2api`：
+
+```bash
+mkdir -p /Users/your-user/wb2api
+tar -xzf workbuddy2api-<tag>-darwin-arm64.tar.gz -C /Users/your-user/wb2api
+cd /Users/your-user/wb2api
+cp config.example.json config.json
+./login
+./wb2api -config "$PWD/config.json"
+```
+
+长期后台运行可以创建 `~/Library/LaunchAgents/com.yule.wb2api.plist`，在 `ProgramArguments` 中填写 `wb2api` 和配置文件的绝对路径，然后加载：
+
+```bash
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.yule.wb2api.plist"
+```
+
+## Windows 计划任务
+
+解压 Windows 包到运行目录，例如 `C:\wb2api`，然后：
+
+```powershell
+Copy-Item config.example.json config.json
+# 编辑 config.json，建议设置 listen=127.0.0.1:7863 和 api_key
+.\login.exe
+```
+
+创建两个登录时启动的计划任务：
+
+```powershell
+schtasks /Create /TN wbapi-gateway /SC ONLOGON /TR "\"C:\wb2api\server.exe\" -config C:\wb2api\config.json" /F
+schtasks /Create /TN wbapi-tunnel  /SC ONLOGON /TR "\"C:\cloudflared\cloudflared.exe\" tunnel run" /F
+```
+
+常用命令：
+
+```powershell
+.\wbapi.exe status
+.\wbapi.exe start
+.\wbapi.exe restart
+.\wbapi.exe log 50
+```
+
+Windows 日志读取运行目录中的 `gateway.log` 和 `gateway.err.log`。
+
+## 源码构建
+
+环境要求：
+
+- Go 1.22+
+- 仅在修改 `web/` 时需要 Node 20+ 和 pnpm 9+
+
+克隆源码后构建：
 
 ```bash
 git clone https://github.com/YuleBest/workbuddy2api.git
 cd workbuddy2api
-cp config.example.json config.json
+go run ./cmd/build
 ```
 
-编辑 `config.json`，**至少设置 `api_key`**（`留空 = 不鉴权`，公网部署务必设置）。示例中的 `test_key` 等均为占位符，`config.example.json` 不含任何真实密钥。
+产物默认写入 `dist/`，包括服务端、运维 CLI、登录、任务和兼容命令名。
+
+修改了管理面板时，先构建前端：
 
 ```bash
-# 登录添加账号（重复执行可加多号；注意：执行过下方说明中的 chown 后，
-# host 侧 login.sh 会被可写性预检拦截——此时请在容器内登录，见下方说明）
-./login.sh
-
-# 启动服务
-docker compose up -d --build
-
-# 健康检查（无可用账号时 503）；service 字段用于确认打到的是本网关
-curl -s http://localhost:7863/healthz
-# {"healthy":2,"total":3,"service":"workbuddy2api"}
+cd web
+pnpm install
+pnpm build
+cd ..
+go run ./cmd/build
 ```
 
-`login.sh` 内置授权 URL 获取 + 浏览器登录 + token 轮询 + 首次签到 + `auths/workbuddy-<uid>.json` 落盘 + 容器重启，全程无 PKCE（state 由服务端签发）。账号池在容器启动时用 `auths/` 目录自动对齐，新增凭证文件即自动发现。
-
-> **非 root 宿主用户注意**：`./login.sh` 以**当前宿主用户**落盘凭证（权限 0600），而容器内网关以 `app(uid 10001)` 读 + 回写（refresh / realm 补标识走 tmp+rename，需要目录写权限）。二者 uid 不同（例如 Linux 非 root 账号通常是 uid 1000）时容器读不到凭证文件，`/status` 账号数为 0——与 `./data` 卷的属主问题同源。登录后、启动前把目录属主交给 10001（root 或部署用户执行）：
->
-> ```bash
-> chown -R 10001:10001 ./auths
-> ```
->
-> 之后新增账号**必须**进**容器内**登录（`app` 自身落盘，属主即 10001，无需反复 chown；chown 后 host 侧 `./login.sh` 无写权限，脚本会在启动浏览器授权前直接退出并提示，不会白走一遍 OAuth。容器内无 docker CLI，完成后回宿主机重启）：
->
-> ```bash
-> docker compose exec -it wb2api bash -c './login.sh' && docker compose restart wb2api
-> ```
-
-## Windows 原生部署（计划任务）
-
-不需要 Docker：构建出 `server.exe`，交给 Windows 计划任务托管，`wbapi` 负责日常操作。
-
-```powershell
-Copy-Item config.example.json config.json
-# 编辑 config.json；建议把 listen 设为 127.0.0.1:7863，且务必设置 api_key
-
-go build -trimpath -ldflags="-s -w" -o server.exe ./cmd/server
-go build -trimpath -ldflags="-s -w" -o login.exe ./cmd/login
-go build -trimpath -ldflags="-s -w" -o signin_bin.exe ./cmd/signin
-go build -trimpath -ldflags="-s -w" -o credit.exe ./cmd/credit
-```
-
-把两个启动入口注册成计划任务（本仓库的约定名字是 `wbapi-gateway` / `wbapi-tunnel`，`wbapi` 的服务命令按这两个名字操作）：
-
-- `gateway-task.cmd` — 启动 `server.exe -config config.json`，PID 写 `gateway.pid`，日志写 `gateway.log` / `gateway.err.log`
-- `tunnel-task.cmd` — 启动 `cloudflared.exe` 隧道，PID 写 `tunnel.pid`
-
-```powershell
-# 以「登录时触发」注册（示例；按需改成开机触发或加延迟）
-schtasks /Create /TN wbapi-gateway /SC ONLOGON /TR "C:\path\to\wb2api-fork\gateway-task.cmd" /F
-schtasks /Create /TN wbapi-tunnel  /SC ONLOGON /TR "C:\path\to\wb2api-fork\tunnel-task.cmd"  /F
-```
-
-这两个 `.cmd` 的内容是本机绝对路径，已被 `.gitignore` 排除，请按自己的目录改写。之后统一用 `wbapi` 操作：
+运行完整检查：
 
 ```bash
-wbapi status      # 网关 / 隧道 / 池子状态
-wbapi start       # = schtasks /Run /TN wbapi-gateway + tunnel
-wbapi restart     # 重启（隧道会闪断几秒）
-wbapi log 50      # 网关日志尾部
-```
-
-> `wbapi` 是 Python 3 脚本，shebang 依赖 `python3`。Windows 上 `python3` 常被 Microsoft Store 的
-> 应用执行别名占用（**执行没有任何输出也不报错**），脚本就没法靠 shebang 直接跑。放一个薄包装到
-> PATH 上，用真实解释器调它即可：
->
-> ```sh
-> #!/bin/sh
-> # ~/bin/wbapi —— 用真实解释器调用仓库里的 wbapi
-> exec uv run --no-project --python 3.12 python "C:/path/to/wb2api-fork/wbapi" "$@"
-> ```
->
-> 没有 uv 的话，把 `uv run --no-project --python 3.12 python` 换成任何真实 Python 3 的绝对路径。
-> Linux / macOS 上 `python3` 通常没被劫持，直接 `./wbapi <命令>` 即可。
-
-仓库里上游遗留的 `start-workbuddy2api.cmd` / `status-workbuddy2api.cmd` / `stop-workbuddy2api.cmd`
-找的是 `wb2api.exe`（`data\server.*.log`、`wb2api.pid`），与本 fork 的 `server.exe` + 计划任务不是一套，
-只用其中一个，别混用。
-
-添加账号在 Git Bash 中运行 `login.sh`（它还负责 CN 首次签到以及 Global 注册地区 / trial 流程），
-或在浏览器里用面板的「账号池」页观察结果。
-
-## 源码构建
-
-管理面板是 Vue 3 单页应用，构建产物经 `go:embed` 打进二进制（仓库内已含一份构建产物，只改后端时可直接编译）。**改动 `web/` 下的前端代码后**，要先重新构建前端：
-
-```bash
-cd web && pnpm install && pnpm build   # 产物落到 internal/admin/dist，被 go:embed 拾取
-cd .. && go build ./cmd/server
-```
-
-开发前端时用 `pnpm dev` 起 Vite 开发服务器（已配置把 `/api/admin` 代理到 `127.0.0.1:7863`），改完再 `pnpm build` 落到二进制里。
-
-```bash
-go build ./...
+go test ./...
 go vet ./...
-go test ./...      # 完整测试套件
-go run ./cmd/server -config config.json
 ```
 
-构建二进制：
+## 源码与运行目录分离
 
-```bash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o server ./cmd/server
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o signin_bin ./cmd/signin
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o login ./cmd/login
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit ./cmd/credit
+开发目录只保存源码、构建产物和 Git 数据；生产配置、凭证、日志和正在运行的二进制应放在独立运行目录。
+
+```text
+源码目录：~/projects/wb2api
+运行目录：~/.local/share/wb2api
 ```
+
+运行目录通常包含：
+
+```text
+wb2api
+wbapi
+login
+config.json
+keys.json
+auths/
+data/
+cloudflared/
+```
+
+升级时先在源码目录构建到临时 staging，再通过服务管理流程把二进制原子安装到运行目录并重启。
+不要在源码目录直接运行生产网关，也不要在服务运行期间逐文件覆盖二进制。
+
+## 发布流程
+
+发布 GitHub Release 后，`.github/workflows/release.yml` 会自动构建 6 个平台包并上传 `SHA256SUMS`。
+普通 push 和 Pull Request 只运行测试，不生成发布包。
 
 ## 验证
 
+先用 CLI 检查服务和账号：
+
 ```bash
-# 模型列表
-curl -s http://localhost:7863/v1/models -H "Authorization: Bearer your-api-key"
+./wbapi status
+./wbapi accounts
+./wbapi doctor
+```
 
-# 账号状态（汇总 + 每账号详情，含 disabled / manual_disabled 双位）
-curl -s http://localhost:7863/status -H "Authorization: Bearer your-api-key"
+再验证模型接口：
 
-# 临时停用一个账号（需 config 里 admin.enabled = true）
-curl -s -X POST http://localhost:7863/admin/accounts/<uid>/disable \
-  -H "Authorization: Bearer your-api-key" -H "Content-Type: application/json" \
-  -d '{"reason":"观察几天"}'
-# 或用 CLI（自动从 config.json 读网关地址与 key）
-./acct.sh list && ./acct.sh disable <uid> 观察几天 && ./acct.sh enable <uid>
+```bash
+curl -s http://127.0.0.1:7863/v1/models \
+  -H "Authorization: Bearer your-api-key"
+```
 
-# 流式聊天
-curl -sN http://localhost:7863/v1/chat/completions \
+发起流式请求：
+
+```bash
+curl -sN http://127.0.0.1:7863/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":true}'
+```
 
-# 非流式聊天（本地聚合）
-curl -s http://localhost:7863/v1/chat/completions \
+发起非流式请求：
+
+```bash
+curl -s http://127.0.0.1:7863/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}'

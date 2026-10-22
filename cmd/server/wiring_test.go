@@ -92,14 +92,14 @@ func TestRealmAwareAvailableForModelDefaultOnCNZeroRegression(t *testing.T) {
 }
 
 // TestModelJSONPath model.json 路径推导（context_length 四级查找链第 3 级接线）：
-// 与 state.json 同目录同名换缀（Docker ./data volume 持久化）；空 state 路径 →
+// 与 state.json 同目录同名换缀（默认数据目录 ./data）；空 state 路径 →
 // 空串（禁用落盘，内存 + 种子仍可用）。
 func TestModelJSONPath(t *testing.T) {
 	cases := []struct {
 		state, want string
 	}{
 		{"./data/state.json", "data/model.json"},
-		{"/app/data/state.json", "/app/data/model.json"},
+		{"/srv/wb2api/data/state.json", "/srv/wb2api/data/model.json"},
 		{"state.json", "model.json"},
 		{"", ""},
 	}

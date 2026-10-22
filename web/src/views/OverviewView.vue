@@ -12,6 +12,7 @@ import {
   Plane,
   RefreshCw,
   RotateCcw,
+  Users,
 } from '@lucide/vue'
 import { api, type CheckinOutcome, type Overview, type TaskResult } from '../api'
 import { guard, toast } from '../store'
@@ -68,6 +69,19 @@ const tokenModels = computed(() => {
     totalPct: Math.round((m.total_tokens / max) * 100),
     inputPct: m.total_tokens > 0 ? (m.prompt_tokens / m.total_tokens) * 100 : 0,
     outputPct: m.total_tokens > 0 ? (m.completion_tokens / m.total_tokens) * 100 : 0,
+  }))
+})
+
+const tokenAccounts = computed(() => {
+  const accounts = token.value?.accounts ?? []
+  const max = Math.max(...accounts.map((a) => a.total_tokens), 1)
+  return accounts.map((a) => ({
+    ...a,
+    label: a.nick || a.uid.slice(0, 8),
+    title: a.nick ? `${a.nick}（${a.uid}）` : a.uid,
+    totalPct: Math.round((a.total_tokens / max) * 100),
+    inputPct: a.total_tokens > 0 ? (a.prompt_tokens / a.total_tokens) * 100 : 0,
+    outputPct: a.total_tokens > 0 ? (a.completion_tokens / a.total_tokens) * 100 : 0,
   }))
 })
 
@@ -401,36 +415,77 @@ function hoursText(hours: number[]) {
         </div>
 
         <div class="border-t border-border pt-6 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-9">
-          <div class="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 class="font-serif text-[0.95rem]">模型 Token 排行</h3>
-            <span class="text-[0.68rem] text-muted-foreground">按总量降序 · 前 {{ tokenModels.length || 8 }} 名</span>
-          </div>
+          <section>
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 class="font-serif text-[0.95rem]">模型 Token 排行</h3>
+              <span class="text-[0.68rem] text-muted-foreground">按总量降序 · 前 {{ tokenModels.length || 8 }} 名</span>
+            </div>
 
-          <div v-if="tokenModels.length" class="mt-4 space-y-4">
-            <div v-for="(m, i) in tokenModels" :key="m.model">
-              <div class="flex items-baseline gap-3">
-                <span class="mono w-5 text-[0.68rem] text-muted-foreground">
-                  {{ String(i + 1).padStart(2, '0') }}
-                </span>
-                <span class="mono min-w-0 flex-1 truncate text-[0.72rem]">{{ m.model }}</span>
-                <span class="num shrink-0 text-[0.72rem] font-medium">{{ tokens(m.total_tokens) }}</span>
-              </div>
-              <div class="mt-1.5 ml-8 flex items-center gap-3">
-                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                  <div class="flex h-full rounded-full" :style="{ width: `${m.totalPct}%` }">
-                    <div class="bg-chart-1" :style="{ width: `${m.inputPct}%` }"></div>
-                    <div class="bg-chart-5" :style="{ width: `${m.outputPct}%` }"></div>
-                  </div>
+            <div v-if="tokenModels.length" class="mt-4 space-y-4">
+              <div v-for="(m, i) in tokenModels" :key="m.model">
+                <div class="flex items-baseline gap-3">
+                  <span class="mono w-5 text-[0.68rem] text-muted-foreground">
+                    {{ String(i + 1).padStart(2, '0') }}
+                  </span>
+                  <span class="mono min-w-0 flex-1 truncate text-[0.72rem]">{{ m.model }}</span>
+                  <span class="num shrink-0 text-[0.72rem] font-medium">{{ tokens(m.total_tokens) }}</span>
                 </div>
-                <span class="num shrink-0 text-[0.66rem] text-muted-foreground">
-                  入 {{ tokens(m.prompt_tokens) }} · 出 {{ tokens(m.completion_tokens) }}
-                </span>
+                <div class="mt-1.5 ml-8 flex items-center gap-3">
+                  <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div class="flex h-full rounded-full" :style="{ width: `${m.totalPct}%` }">
+                      <div class="bg-chart-1" :style="{ width: `${m.inputPct}%` }"></div>
+                      <div class="bg-chart-5" :style="{ width: `${m.outputPct}%` }"></div>
+                    </div>
+                  </div>
+                  <span class="num shrink-0 text-[0.66rem] text-muted-foreground">
+                    入 {{ tokens(m.prompt_tokens) }} · 出 {{ tokens(m.completion_tokens) }}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-          <EmptyState v-else :icon="Boxes" title="还没有模型 Token 记录">
-            收到带 usage 的请求后，这里会按模型累计输入与输出 Token。
-          </EmptyState>
+            <EmptyState v-else :icon="Boxes" title="还没有模型 Token 记录">
+              收到带 usage 的请求后，这里会按模型累计输入与输出 Token。
+            </EmptyState>
+          </section>
+
+          <section class="mt-8 border-t border-border/70 pt-6">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 class="font-serif text-[0.95rem]">账号 Token 排行</h3>
+              <span
+                class="text-[0.68rem] text-muted-foreground"
+                title="账号维度从启用该统计后开始累计；历史数据只保留模型维度"
+              >按总量降序 · 前 {{ tokenAccounts.length || 8 }} 名</span>
+            </div>
+            <p class="mt-1 text-[0.66rem] leading-relaxed text-muted-foreground">
+              账号维度从启用该统计后开始累计；历史 Token 仅保留模型维度。
+            </p>
+
+            <div v-if="tokenAccounts.length" class="mt-4 space-y-4">
+              <div v-for="(a, i) in tokenAccounts" :key="a.uid">
+                <div class="flex items-baseline gap-3">
+                  <span class="mono w-5 text-[0.68rem] text-muted-foreground">
+                    {{ String(i + 1).padStart(2, '0') }}
+                  </span>
+                  <span class="mono min-w-0 flex-1 truncate text-[0.72rem]" :title="a.title">{{ a.label }}</span>
+                  <span class="num shrink-0 text-[0.72rem] font-medium">{{ tokens(a.total_tokens) }}</span>
+                </div>
+                <div class="mt-1.5 ml-8 flex items-center gap-3">
+                  <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div class="flex h-full rounded-full" :style="{ width: `${a.totalPct}%` }">
+                      <div class="bg-chart-1" :style="{ width: `${a.inputPct}%` }"></div>
+                      <div class="bg-chart-5" :style="{ width: `${a.outputPct}%` }"></div>
+                    </div>
+                  </div>
+                  <span class="num shrink-0 text-[0.66rem] text-muted-foreground">
+                    入 {{ tokens(a.prompt_tokens) }} · 出 {{ tokens(a.completion_tokens) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <EmptyState v-else :icon="Users" title="还没有账号 Token 记录">
+              收到带 usage 的请求后，这里会按账号累计输入与输出 Token。
+            </EmptyState>
+          </section>
         </div>
       </div>
     </Panel>
@@ -527,7 +582,7 @@ function hoursText(hours: number[]) {
     <ConfirmDialog
       v-model:open="resetTokenOpen"
       title="清零 Token 统计？"
-      description="输入、输出 Token 和模型 Token 排行会从当前时刻重新累计。请求日志、请求次数和延迟统计不会被清除。"
+      description="输入、输出 Token、模型与账号 Token 排行会从当前时刻重新累计。请求日志、请求次数和延迟统计不会被清除。"
       confirm-text="确认清零"
       destructive
       :busy="resetTokenBusy"

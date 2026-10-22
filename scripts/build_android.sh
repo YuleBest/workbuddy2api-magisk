@@ -41,7 +41,7 @@ build() {
 }
 
 build "$STAGE/bin/wb2api-server" ./cmd/server
-build "$STAGE/bin/wbapi" ./cmd/wbapi
+build "$STAGE/bin/wbapi" ./cmd/wbapi-android
 build "$STAGE/bin/wb2api-login" ./cmd/login
 
 chmod 0755 "$STAGE"/bin/*

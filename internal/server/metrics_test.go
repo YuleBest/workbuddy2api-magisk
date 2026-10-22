@@ -63,6 +63,48 @@ func TestMetricsAggregatesByModel(t *testing.T) {
 	}
 }
 
+// TestMetricsAggregatesByAccount 账号维度按 UID 累加：Token 只采信 usage，
+// 请求数覆盖全部路径；同一账号昵称更新取最新非空值。
+func TestMetricsAggregatesByAccount(t *testing.T) {
+	resetMetricsForTest(t)
+
+	recordChatMetric(&chatStat{
+		uid: "u1", nick: "甲", model: "m", mode: "stream", status: 200,
+		hasUsage: true, prompt: 10, toks: 5,
+	}, time.Second)
+	recordChatMetric(&chatStat{
+		uid: "u1", nick: "甲", model: "m", mode: "stream", status: 200,
+		hasUsage: true, prompt: 20, toks: 7,
+	}, time.Second)
+	recordChatMetric(&chatStat{
+		uid: "u2", nick: "乙", model: "m", mode: "sync", status: 200,
+		hasUsage: true, prompt: 1, toks: 2,
+	}, time.Second)
+	recordChatMetric(&chatStat{
+		uid: "u2", nick: "乙", model: "m", mode: "sync", status: 500, toks: -1,
+	}, time.Second)
+
+	snap := MetricsSnapshotOf()
+	if len(snap.Accounts) != 2 {
+		t.Fatalf("accounts=%d want 2: %+v", len(snap.Accounts), snap.Accounts)
+	}
+	got := map[string]AccountStatPayload{}
+	for _, a := range snap.Accounts {
+		got[a.UID] = a
+	}
+	if a := got["u1"]; a.Nick != "甲" || a.Requests != 2 || a.PromptTokens != 30 ||
+		a.CompletionTokens != 12 || a.TotalTokens != 42 {
+		t.Errorf("u1 = %+v, want 甲 2req 30/12/42", a)
+	}
+	if a := got["u2"]; a.Nick != "乙" || a.Requests != 2 || a.PromptTokens != 1 ||
+		a.CompletionTokens != 2 || a.TotalTokens != 3 {
+		t.Errorf("u2 = %+v, want 乙 2req 1/2/3", a)
+	}
+	if snap.Accounts[0].UID != "u1" {
+		t.Errorf("accounts 应按总 Token 降序，首条 = %q", snap.Accounts[0].UID)
+	}
+}
+
 // TestMetricsMissingUsageNotCountedAsZero usage 缺失时不得把 0 计进 token/缓存。
 func TestMetricsMissingUsageNotCountedAsZero(t *testing.T) {
 	resetMetricsForTest(t)
@@ -116,8 +158,9 @@ func TestMetricsResetClears(t *testing.T) {
 	}
 	ResetMetrics()
 	snap := MetricsSnapshotOf()
-	if snap.Total.Requests != 0 || len(snap.Models) != 0 {
-		t.Errorf("重置后 requests=%d models=%d want 0/0", snap.Total.Requests, len(snap.Models))
+	if snap.Total.Requests != 0 || len(snap.Models) != 0 || len(snap.Accounts) != 0 {
+		t.Errorf("重置后 requests=%d models=%d accounts=%d want 0/0/0",
+			snap.Total.Requests, len(snap.Models), len(snap.Accounts))
 	}
 }
 
@@ -127,7 +170,7 @@ func TestMetricsPersistAcrossRestart(t *testing.T) {
 	SetMetricsPersistencePath(path)
 
 	recordChatMetric(&chatStat{
-		model: "model-a", mode: "stream", status: 200,
+		uid: "u1", nick: "甲", model: "model-a", mode: "stream", status: 200,
 		ttfb: time.Second, toks: 30, hasUsage: true, prompt: 120,
 		cacheHit: 80, cacheMiss: 20,
 	}, 4*time.Second)
@@ -141,6 +184,10 @@ func TestMetricsPersistAcrossRestart(t *testing.T) {
 	if len(snap.Models) != 1 || snap.Models[0].Model != "model-a" {
 		t.Fatalf("恢复后 models = %+v", snap.Models)
 	}
+	if len(snap.Accounts) != 1 || snap.Accounts[0].UID != "u1" ||
+		snap.Accounts[0].Nick != "甲" || snap.Accounts[0].TotalTokens != 150 {
+		t.Fatalf("恢复后 accounts = %+v", snap.Accounts)
+	}
 	if snap.TokenSince.IsZero() || snap.TokenSince.After(snap.Now) {
 		t.Errorf("token_since 未恢复：%v", snap.TokenSince)
 	}
@@ -152,7 +199,7 @@ func TestResetTokenStatsPreservesNonTokenMetricsAndPersists(t *testing.T) {
 	SetMetricsPersistencePath(path)
 
 	recordChatMetric(&chatStat{
-		model: "model-a", mode: "stream", status: 200,
+		uid: "u1", nick: "甲", model: "model-a", mode: "stream", status: 200,
 		ttfb: time.Second, toks: 30, hasUsage: true, prompt: 120,
 		cacheHit: 80, cacheMiss: 20, cacheWr: 10,
 		credit: 0.5, hasCredit: true,
@@ -171,6 +218,10 @@ func TestResetTokenStatsPreservesNonTokenMetricsAndPersists(t *testing.T) {
 	if after.Total.Credit != before.Total.Credit {
 		t.Errorf("credit = %v, want preserved %v", after.Total.Credit, before.Total.Credit)
 	}
+	if len(after.Accounts) != 1 || after.Accounts[0].TotalTokens != 0 ||
+		after.Accounts[0].Requests != 1 {
+		t.Errorf("账号 Token 未清零或请求数未保留：%+v", after.Accounts)
+	}
 
 	SetMetricsPersistencePath("")
 	SetMetricsPersistencePath(path)
@@ -180,6 +231,9 @@ func TestResetTokenStatsPreservesNonTokenMetricsAndPersists(t *testing.T) {
 	}
 	if restored.Total.Requests != 1 {
 		t.Errorf("重启后 requests = %d, want 1", restored.Total.Requests)
+	}
+	if len(restored.Accounts) != 1 || restored.Accounts[0].TotalTokens != 0 {
+		t.Errorf("重启后账号 Token = %+v, want 0", restored.Accounts)
 	}
 }
 

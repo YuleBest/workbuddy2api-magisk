@@ -102,7 +102,7 @@ func (c *Client) UseMakeupCard(a *auth.Auth, targetDate string) error {
 	return err
 }
 
-// cstShanghai 上游自然日口径：CST（Asia/Shanghai），固定 +8，不依赖容器 tzdata
+// cstShanghai 上游自然日口径：CST（Asia/Shanghai），固定 +8，不依赖系统 tzdata
 // （与 scheduler.travelDay 同一口径，此处独立定义避免跨包依赖）。
 var cstShanghai = time.FixedZone("CST", 8*60*60)
 
@@ -110,7 +110,7 @@ var cstShanghai = time.FixedZone("CST", 8*60*60)
 // 连登断档只可能发生在「上一个自然日」（今日尚未结算）。
 //
 // 必须先 In(cstShanghai) 再 AddDate：AddDate 按**入参 Time 所在时区**做日历日减法，
-// 容器时区含夏令时时，切换日的 23h/25h 会把瞬时点挪 1 小时、CST 日期错位一天
+// 运行环境时区含夏令时时，切换日的 23h/25h 会把瞬时点挪 1 小时、CST 日期错位一天
 // （补签漏掉真实断档或补错日期）。先归一到 CST 再减日即与 scheduler.travelDay 同口径
 // （CST 无夏令时，减一日恒为前一个 CST 自然日）。
 func GrowthYesterdayDate(now time.Time) string {

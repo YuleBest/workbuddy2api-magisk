@@ -41,6 +41,7 @@ type chatStat struct {
 	cacheWr   int
 	credit    float64
 	hasCredit bool
+	credits   string // 模型积分倍率原文（目录只读快照；空 = 目录未收录/缓存冷）
 
 	logged bool
 }
@@ -68,7 +69,7 @@ func (s *chatStat) done() {
 	if s.hasUsage {
 		promptTokens = s.prompt
 	}
-	logChatRow(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, promptTokens, s.toks)
+	logChatRowWithCredits(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, promptTokens, s.toks, s.credit, s.hasCredit, s.credits)
 	recordChatMetric(s, total)
 }
 
@@ -254,7 +255,18 @@ func tokPerSec(toks int, total time.Duration) float64 {
 //     uid8 时人眼无法判断是哪个号，要辨认必须再查 auths/，排障多一跳；
 //   - promptTokens/completionTokens <0 表示 usage 缺失，显示 "-"。
 func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, promptTokens, completionTokens int) {
+	logChatRowWithCredits(ttfb, total, model, mode, uid, nick, status, promptTokens, completionTokens, 0, false, "")
+}
+
+// logChatRowWithCredits 同 logChatRow，额外记录本次实际积分消耗与模型倍率。
+// hasCredit=false 表示上游 usage 未带 credit（缺失≠0，JSON 省略该字段）。
+func logChatRowWithCredits(ttfb, total time.Duration, model, mode, uid, nick string, status int, promptTokens, completionTokens int, credit float64, hasCredit bool, credits string) {
 	seq := chatSeq.Add(1)
+	var creditPtr *float64
+	if hasCredit {
+		v := credit
+		creditPtr = &v
+	}
 	// 入环（管理后台的实时请求列表）：与 stdout 表格同一数据源，但不受 chatLogEnabled
 	// 影响——缓冲是产品能力，stdout 是诊断输出。seq 与打印行共用，编号不跳号。
 	appendRequest(RequestRecord{
@@ -269,6 +281,8 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		Tokens:           completionTokens,
+		Credit:           creditPtr,
+		Credits:          credits,
 		TotalMS:          total.Milliseconds(),
 		TokPS:            tokPerSec(completionTokens, total),
 	})

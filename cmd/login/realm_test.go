@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+func TestRuntimeHomeEnvOverride(t *testing.T) {
+	t.Setenv("WB2A_HOME", "/tmp/wb2api-runtime")
+	if got := runtimeHome(); got != "/tmp/wb2api-runtime" {
+		t.Fatalf("runtimeHome()=%q", got)
+	}
+}
+
 // TestParseRealmArgs 覆盖 --realm 参数解析：缺省 cn、等号/分离式写法、
 // 非法值/缺值报错、大小写归一、剥离 flag 后剩余参数保持相对顺序。
 func TestParseRealmArgs(t *testing.T) {

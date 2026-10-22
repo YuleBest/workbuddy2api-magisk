@@ -72,7 +72,7 @@ const wafCooldownBase = 60 * time.Second
 
 // adminRoute 运维管理端点：模式 + 处理函数。注册与对外暴露共用同一份表，
 // 宿主（cmd/server）把 /admin/ 前缀交给 Web 后台前端时，必须按 AdminRoutePatterns()
-// 把这些端点先转回数据面，否则会被 SPA 的前缀匹配吃掉（acct.sh / cmd/acct 会 404）。
+// 把这些端点先转回数据面，否则会被 SPA 的前缀匹配吃掉（cmd/acct / wbapi acct 会 404）。
 type adminRoute struct {
 	pattern string
 	handle  func(*Handler, http.ResponseWriter, *http.Request)
@@ -550,6 +550,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
 	st := newChatStat(time.Now(), body, peek.Stream)
+	// 模型倍率是目录展示字段：只读快照查表，缓存冷/目录未收录 → 空串（不编造）。
+	st.credits = h.modelCreditsFor(peek.Model)
 	defer st.done()
 
 	tried := map[string]bool{}
@@ -654,8 +656,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 是服务端指令，走本网关的客户端不属于该形态）。此处**轮转循环外**生成一次，
 	// 循环内每次出站原样复用 → 换号/重试/降级全部同 ID，后台不再碎片化（此前网关
 	// 一个都不发，上游按 HTTP 请求逐条记账，同一对话几十上百个 RequestID）。
-	//   - conversationID：body 提取（透传客户端原值，缺省空串——不伪造，见
-	//     ResolveConversationID；官方后台不校验一致，空会话则不建立聚合键）；
+	//   - conversationID：body 提取（透传客户端原值）。缺省不在这里伪造，由
+	//     upstream.ChatHeaders 按本轮聚合键补成带横线 UUID——X-Conversation-ID
+	//     是上游渠道校验的必发项，缺失会 400 code=11-128 "conversation id missing"；
 	//   - conversationRequestID：入站 X-Conversation-Request-ID 透传优先（客户端已
 	//     有自己的对话轮 ID 则以客户端为准）。派生分两态：
 	//     * turnKey 非空（有末条 user 消息）→ 带会话键客户端走 TurnRequestID(
@@ -1244,6 +1247,34 @@ func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintCont
 		}
 	}
 	return ctx
+}
+
+// modelCreditsFor 按请求模型名（可带 realm 前缀）从只读模型目录取积分倍率原文。
+// 数据源与 /v1/models、/v1/stats 的 enrichCredits 完全同源：CN cachedModelsSnapshot /
+// global GlobalModelInfosSnapshot；缓存冷或目录未收录返回空串（缺失≠免费，不编造）。
+// 不发起上游调用，只在请求入口做一次小表线性查。
+func (h *Handler) modelCreditsFor(model string) string {
+	realm, bare := resolveModel(model)
+	if bare == "" || bare == "-" {
+		return ""
+	}
+	if realm == "global" {
+		if h.cfg.Upstream == nil {
+			return ""
+		}
+		for _, mi := range h.cfg.Upstream.GlobalModelInfosSnapshot() {
+			if mi.ID == bare {
+				return mi.Credits
+			}
+		}
+		return ""
+	}
+	for _, mi := range cachedModelsSnapshot() {
+		if mi.ID == bare {
+			return mi.Credits
+		}
+	}
+	return ""
 }
 
 // cachedModelsSnapshot 只读模型目录缓存（TTL 内快照）；缓存冷/空 → nil。

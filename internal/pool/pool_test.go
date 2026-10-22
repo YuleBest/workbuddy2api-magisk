@@ -1380,8 +1380,8 @@ func TestSaveFailureRecordedAndRecovers(t *testing.T) {
 }
 
 // TestSaveLockedPermissionDenied 不可写目录触发落盘失败：首错详报出现且无 panic，
-// persistFails 计数累加。chmod 0500 模拟容器内 app(uid 10001) 对 root:root 目录
-// 无写权限的 issue #52 场景。注意：若测试以 root 运行，chmod 不阻写——此时回落到
+// persistFails 计数累加。chmod 0500 模拟网关运行用户对数据目录无写权限的场景。
+// 注意：若测试以 root 运行，chmod 不阻写——此时回落到
 // "父路径是文件"的可靠失败路径，保证测试恒定可复现。
 func TestSaveLockedPermissionDenied(t *testing.T) {
 	dir := t.TempDir()

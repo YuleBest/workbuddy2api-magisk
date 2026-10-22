@@ -204,7 +204,7 @@ func TestRotationPreservesFullContext(t *testing.T) {
 
 // TestStatusModelCostsLedger end-to-end（P1-anti-monopoly 可观测性）：成功请求
 // 记入成本账本后，GET /status 的 accounts[].model_costs 透出台账——每模型一行
-//（model/cost_per_1k/last_seen/samples），免费观测 per1k=0、收费观测 per1k>0，
+// （model/cost_per_1k/last_seen/samples），免费观测 per1k=0、收费观测 per1k>0，
 // 无观测账号该字段为空。
 func TestStatusModelCostsLedger(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
@@ -262,5 +262,59 @@ func TestStatusModelCostsLedger(t *testing.T) {
 				t.Errorf("u2 cost_per_1k=%v want 0", row.CostPer1k)
 			}
 		}
+	}
+}
+
+// TestChatRequestLogRecordsCredit 成功流式请求把 usage.credit 写入请求日志；
+// 与成本账本同源（缺失≠0，见下一个用例）。
+func TestChatRequestLogRecordsCredit(t *testing.T) {
+	resetRequestLogForTest(t)
+	defer resetRequestLogForTest(t)
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, sseWithCredit, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at-u1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"hy3","messages":[],"stream":true}`)))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	rows := RecentRequests(1)
+	if len(rows) != 1 {
+		t.Fatalf("request log rows = %d, want 1", len(rows))
+	}
+	if rows[0].Credit == nil || *rows[0].Credit != 2.0 {
+		t.Errorf("credit = %v, want 2.0", rows[0].Credit)
+	}
+}
+
+// TestChatRequestLogCreditMissingOmitted usage 有但无 credit 时日志省略该字段，
+// 不能把缺观测写成 0。
+func TestChatRequestLogCreditMissingOmitted(t *testing.T) {
+	resetRequestLogForTest(t)
+	defer resetRequestLogForTest(t)
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, sseUsageNoCredit, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at-u1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"hy3","messages":[],"stream":true}`)))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	rows := RecentRequests(1)
+	if len(rows) != 1 {
+		t.Fatalf("request log rows = %d, want 1", len(rows))
+	}
+	if rows[0].Credit != nil {
+		t.Errorf("credit = %v, want nil", rows[0].Credit)
 	}
 }

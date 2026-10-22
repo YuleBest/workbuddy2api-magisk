@@ -1,6 +1,0 @@
-import{c as r,d as c,o as t,a as s,b as o,p as d,D as l,u as m,t as u,J as n,i}from"./index-DNp3EcJt.js";/**
- * @license @lucide/vue v1.59.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */const p={name:"inbox",size:24,node:[["polyline",{points:"22 12 16 12 14 15 10 15 8 12 2 12",key:"o97t9d"}],["path",{d:"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",key:"oot6mr"}]]},_=r(p),f={class:"flex flex-col gap-4 px-5 py-10 sm:flex-row sm:items-center sm:px-6"},h={class:"grid size-10 shrink-0 place-items-center rounded-full border border-border bg-muted text-muted-foreground"},x={class:"min-w-0"},g={class:"font-serif text-[0.98rem] leading-snug"},y={key:0,class:"mt-1 max-w-[65ch] text-xs leading-relaxed text-muted-foreground"},k={key:0,class:"sm:ml-auto"},z=c({__name:"EmptyState",props:{icon:{},title:{}},setup(a){return(e,v)=>(t(),s("div",f,[o("div",h,[(t(),d(l(a.icon||m(_)),{class:"size-4","aria-hidden":"true"}))]),o("div",x,[o("p",g,u(a.title),1),e.$slots.default?(t(),s("div",y,[n(e.$slots,"default")])):i("",!0)]),e.$slots.action?(t(),s("div",k,[n(e.$slots,"action")])):i("",!0)]))}});export{_ as I,z as _};

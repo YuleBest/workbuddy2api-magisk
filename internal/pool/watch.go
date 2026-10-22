@@ -5,7 +5,7 @@
 //
 // 实现选择——轮询而非 fsnotify：
 //   - 零新依赖（fsnotify 要引第三方库，本仓库依赖面刻意保持极窄：仅 go-redis）。
-//   - 语义更稳：fsnotify 在容器/网络文件系统上有丢事件与 inotify 句柄耗尽的老问题；
+//   - 语义更稳：fsnotify 在网络文件系统上有丢事件与 inotify 句柄耗尽的老问题；
 //     轮询只看目录内容指纹，漏不掉、也不会因事件风暴抖动。
 //   - 代价可接受：目录里只有几十个凭证文件，每次轮询只做一次 ReadDir + 名字比对，
 //     默认 5s 周期下 CPU 开销可忽略（实测常驻 0.0%）。
@@ -82,7 +82,7 @@ func (p *Pool) StartAuthDirWatch(dir string) (stop func()) {
 //
 // 全量重扫而非增量：目录只有几十个文件，全扫的代价远低于维护增量状态
 // （增量需要处理"文件改名""写了一半"等边界）。auth.LoadDir 自身跳过坏文件，
-// 故半写入的临时文件（login.sh 用 tempfile + os.replace 原子替换）不会造成误判。
+// 故半写入的临时文件（Go login 用临时文件 + rename 原子替换）不会造成误判。
 func (p *Pool) reloadAuthDir(dir string) {
 	auths, err := auth.LoadDir(dir)
 	if err != nil {
@@ -102,7 +102,7 @@ func (p *Pool) reloadAuthDir(dir string) {
 
 // dirFingerprint 生成目录内容指纹：文件名 + 修改时间 + 大小，排序后拼接。
 //
-// 为什么不用纯文件名：凭证刷新（login.sh 覆盖同 uid 文件）时文件名不变，
+// 为什么不用纯文件名：凭证刷新（login 覆盖同 uid 文件）时文件名不变，
 // 只比名字会漏掉这类更新。mtime + size 能覆盖"凭证被刷新"与"文件被替换"。
 //
 // 返回 (指纹, 目录是否可读)。**必须用独立的 ok 而不是"空串=不可读"**：

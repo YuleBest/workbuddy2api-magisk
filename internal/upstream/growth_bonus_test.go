@@ -45,7 +45,7 @@ func (s *bonusStub) handler() http.Handler {
 			// 日期标签必须与生产侧同口径（CST 自然日，见 cstShanghai /
 			// GrowthYesterdayDate）：上游 heatmap 的 date 是 CST 自然日，断言侧也用
 			// CST（GrowthYesterdayDate 与 time.Now().In(cstShanghai)）。若此处用进程
-			// 本地时区（容器恒 UTC），则在 UTC 16:00–24:00（= CST 次日 00:00–08:00）
+			// 本地时区（运行环境恒 UTC），则在 UTC 16:00–24:00（= CST 次日 00:00–08:00）
 			// 窗口内标签整体错一天：stub 的"今日"变成被测代码眼中的"昨日"，断言必然
 			// 失败（每天固定 8 小时的时序性红灯，不是偶发抖动）。
 			cstNow := time.Now().In(cstShanghai)
@@ -212,7 +212,7 @@ func TestGrowthYesterdayDateCST(t *testing.T) {
 	}
 }
 
-// TestGrowthYesterdayDateDSTZone 容器时区含夏令时（如 America/New_York）时，
+// TestGrowthYesterdayDateDSTZone 运行环境时区含夏令时（如 America/New_York）时，
 // 昨日 CST 自然日必须仍按 CST 日界计算。
 //
 // 缺陷：GrowthYesterdayDate 先 AddDate(0,0,-1)（按**入参 Time 的时区**做日历日减法）

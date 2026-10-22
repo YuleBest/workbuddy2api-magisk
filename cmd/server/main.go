@@ -26,7 +26,7 @@ import (
 )
 
 // modelJSONPath 由 state.json 路径推导 model.json 路径（同目录同名换缀）：
-// 两者同为数据目录持久化物（Docker ./data volume），配套而非各自配置。
+// 两者同为数据目录持久化物，配套而非各自配置。
 // state 路径为空（纯内存测试形态）→ 空 = 禁用 model.json 落盘（内存 + 种子仍可用）。
 func modelJSONPath(stateFile string) string {
 	if stateFile == "" {
@@ -80,7 +80,7 @@ func main() {
 	auth.SetGlobalEnabled(cfg.Global.Enabled)
 
 	// model.json 本地缓存接线（context_length 四级查找链第 3 级）：数据目录与
-	// state.json 同风格（Docker volume 持久化路径 ./data）。首次缺失/损坏自动回落
+	// state.json 同风格（默认数据目录 ./data）。首次缺失/损坏自动回落
 	// 仓库种子 embed；models.dev 按需拉取成功后原子写回。
 	upstream.SetModelCatalogPath(modelJSONPath(cfg.StateFile))
 	server.SetRequestLogPath(requestLogJSONPath(cfg.StateFile))
@@ -212,12 +212,12 @@ func main() {
 	if !cfg.Schedule.SchoolEnabled {
 		log.Printf("开学季任务已禁用（schedule.school_enabled=false）")
 	} else {
-		log.Printf("开学季任务已启用：%v 点（school_open_day_2026.py ALL --run --yes）", cfg.Schedule.SchoolHours)
+		log.Printf("开学季任务已启用：%v 点（进程内 Go school 任务）", cfg.Schedule.SchoolHours)
 	}
 	if !cfg.Schedule.CatEnabled {
 		log.Printf("夜猫子任务已禁用（schedule.cat_enabled=false）")
 	} else {
-		log.Printf("夜猫子任务已启用：%v 点（task_runner.py ALL --yes --only black_cat）", cfg.Schedule.CatHours)
+		log.Printf("夜猫子任务已启用：%v 点（进程内 Go task_runner 任务）", cfg.Schedule.CatHours)
 	}
 
 	keys := server.NewKeyStore(cfg.KeysFile, cfg.APIKey)
@@ -245,6 +245,11 @@ func main() {
 	} else {
 		log.Printf("自动定时任务已禁用")
 	}
+
+	// 请求日志的模型倍率与 /v1/models 同源，读 handler 内的只读目录缓存。
+	// 进程重启后缓存是冷的，这里后台预热一次，避免首批请求的倍率列全是「—」；
+	// 预热失败不影响启动，后续 /v1/models 或管理端模型页仍会再次填充。
+	go h.ModelList()
 
 	// 根路由：/admin 前端 + /api/admin 管理 API + 其余交给网关数据面。
 	// 挂在根 mux 而不是塞进 server.Handler：管理后台与数据面互不感知，
@@ -285,7 +290,7 @@ func main() {
 		root := http.NewServeMux()
 		// 上游的运维端点注册在网关 handler 内部（见 server.AdminRoutePatterns）；这里
 		// 先按同一份表把它们转回数据面，再挂 SPA——否则 /admin/ 前缀会把管理端点整个
-		// 吃掉，acct.sh / cmd/acct 直接 404。列表来自 server 包，上游加端点不会漏转。
+		// 吃掉，cmd/acct / wbapi acct 直接 404。列表来自 server 包，上游加端点不会漏转。
 		for _, pattern := range server.AdminRoutePatterns() {
 			root.Handle(pattern, h)
 		}

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"workbuddy2api/internal/auth"
@@ -37,7 +38,7 @@ type accountResult struct {
 }
 
 func main() {
-	pretty := len(os.Args) > 1 && os.Args[1] == "-pretty"
+	pretty := creditPrettyMode(filepath.Base(os.Args[0]), os.Args[1:])
 	authDir := "./auths"
 	if v := os.Getenv("WB2A_AUTH_DIR"); v != "" {
 		authDir = v
@@ -46,6 +47,16 @@ func main() {
 	up.GlobalEnabled = true // 允许按 realm 路由：global 账查积分走 workbuddy.ai
 	accounts := collect(authDir, up)
 	printAccounts(accounts, pretty)
+}
+
+// creditPrettyMode preserves the two historical entry points:
+//   - credit: JSON by default, -pretty for the human report;
+//   - credit.sh: pretty by default, -json for raw JSON.
+func creditPrettyMode(program string, args []string) bool {
+	if program == "credit.sh" {
+		return len(args) == 0 || args[0] != "-json"
+	}
+	return len(args) > 0 && args[0] == "-pretty"
 }
 
 // collect 遍历 auths 目录并查询每个账号的积分摘要。供测试注入 fake upstream 断言
